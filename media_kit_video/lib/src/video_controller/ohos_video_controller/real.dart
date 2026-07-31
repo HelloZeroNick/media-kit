@@ -182,6 +182,7 @@ class OhosVideoController extends PlatformVideoController {
           'sub-use-margins': 'no',
           'sub-scale-with-window': 'no',
           'osd-font': 'HarmonyOS Sans SC',
+          '--vd-lavc-ohos-smart-fluency': 'yes'
         },
       );
       await controller.setProperty('vo', configuration.vo!);
