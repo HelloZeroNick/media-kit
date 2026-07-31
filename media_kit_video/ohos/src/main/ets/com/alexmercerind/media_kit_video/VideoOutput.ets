@@ -27,6 +27,7 @@ export class VideoOutput {
     this.textureRegistry = textureRegistry;
     this.id = this.surfaceProducer.getTextureId();
     this.wid = this.surfaceProducer.getSurfaceId();
+    this.textureRegistry.setTextureBackGroundColor(this.id, 0xFF000000);
     this.setSurfaceSize(1, 1, true);
   }
 
