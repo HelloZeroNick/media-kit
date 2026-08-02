@@ -83,6 +83,6 @@ endif()
 project(mediakit_libs_ohos)
 
 set(LIBS
-    ${CMAKE_CURRENT_SOURCE_DIR}/../../../libs/arm64-v8a/libmpv.so.2)
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../../libs/arm64-v8a/libmpv.so)
 
 link_libraries(DART_SHARED_LIB ${LIBS})

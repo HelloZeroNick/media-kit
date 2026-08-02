@@ -38,6 +38,8 @@ import 'package:media_kit/src/player/platform_player.dart';
 
 import 'package:media_kit/generated/libmpv/bindings.dart' as generated;
 
+import '../../../../ffi/src/utf8.dart';
+
 /// Initializes the native backend for package:media_kit.
 void nativeEnsureInitialized({String? libmpv}) {
   AndroidHelper.ensureInitialized();
@@ -2175,6 +2177,39 @@ class NativePlayer extends PlatformPlayer {
             calloc.free(value.ref.u.list.ref.values);
             calloc.free(value.ref.u.list);
             calloc.free(value);
+          }
+          mpv.mpv_free(uri.cast());
+          calloc.free(name);
+        } catch (exception, stacktrace) {
+          print(exception);
+          print(stacktrace);
+        }
+        // Handle extras specified in the [Media].
+        try {
+          final name = 'path'.toNativeUtf8();
+          final uri = mpv.mpv_get_property_string(
+            ctx,
+            name.cast(),
+          );
+          // Get the extras for current [Media] by looking up [uri] in the [HashMap].
+          final extras = Media(uri.cast<Utf8>().toDartString()).extras;
+          if (extras != null) {
+            for (final entry in extras.entries) {
+              try {
+                final property = entry.key.toNativeUtf8();
+                final value = entry.value.toString().toNativeUtf8();
+                mpv.mpv_set_property_string(
+                  ctx,
+                  property.cast(),
+                  value.cast(),
+                );
+                calloc.free(property);
+                calloc.free(value);
+              } catch (exception, stacktrace) {
+                print(exception);
+                print(stacktrace);
+              }
+            }
           }
           mpv.mpv_free(uri.cast());
           calloc.free(name);
