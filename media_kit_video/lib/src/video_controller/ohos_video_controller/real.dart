@@ -125,25 +125,6 @@ class OhosVideoController extends PlatformVideoController {
       hwdec: configuration.hwdec ?? await getDefaultHwdec(),
     );
 
-    // Direct decode-to-surface passthrough (vo=ohcodec_embed). The OHCodec
-    // hardware decoder renders frames straight into the Flutter external
-    // texture surface; no mpv GPU rendering pipeline is involved.
-    //
-    // Hardening:
-    //  - vo 使用级联 `ohcodec_embed,gpu-next`：mpv 的 --vo 是
-    //    OPT_SETTINGSLIST（init_best_video_out 逐个尝试），ohcodec_embed
-    //    preinit 失败（如 surface 无效）时自动回退到 gpu-next。
-    //  - hwdec 强制 `ohcodec`：OHCodec 不可用时解码确定性失败，而不是在
-    //    auto 下尝试其他 hwdec 产生软解帧（ohcodec_embed 的 query_format
-    //    只接受 IMGFMT_OHCODEC，软解帧必然报 "Cannot convert ..."）。
-    final bool passthrough = configuration.vo == 'ohcodec_embed';
-    if (passthrough) {
-      configuration = configuration.copyWith(
-        vo: 'ohcodec_embed,gpu-next',
-        hwdec: 'ohcodec',
-      );
-    }
-
     // Retrieve the native handle of the [Player].
     final handle = await player.handle;
     // Return the existing [VideoController] if it's already created.
@@ -197,7 +178,7 @@ class OhosVideoController extends PlatformVideoController {
           'wid': wid.toString(),
           'hwdec': configuration.hwdec!,
           'vid': 'auto',
-          if (!passthrough) 'force-window': 'yes',
+          'force-window': 'yes',
           'sub-use-margins': 'no',
           'sub-scale-with-window': 'no',
           'osd-font': 'HarmonyOS Sans SC',
