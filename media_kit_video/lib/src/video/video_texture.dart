@@ -18,6 +18,8 @@ import 'package:media_kit_video/src/utils/wakelock.dart';
 import 'package:media_kit_video/src/video_view_parameters.dart';
 import 'package:media_kit_video/src/video_controller/video_controller.dart';
 import 'package:media_kit_video/src/video_controller/platform_video_controller.dart';
+import 'package:media_kit_video/src/video_controller/ohos_video_controller/ohos_video_controller.dart';
+import 'package:media_kit_video/src/video/video_ohos_view_interface.dart';
 
 /// {@template video}
 ///
@@ -387,7 +389,18 @@ class VideoState extends State<Video> with WidgetsBindingObserver {
             child: Stack(
               fit: StackFit.expand,
               children: [
-                ClipRect(
+                if (OhosVideoController.supported &&
+                    OhosVideoController.usePlatformView)
+                  // Platform view mode: create the XComponent unconditionally
+                  // (it must exist to produce the surface mpv renders into —
+                  // gating it on width/height/id/rect deadlocks, because those
+                  // only become available once mpv has a video output) and
+                  // WITHOUT ClipRect/FittedBox — Flutter transforms do not apply
+                  // to native views (under HCPP the view is an independent ArkUI
+                  // system layer). Aspect ratio is handled natively by mpv.
+                  buildOhosVideoSurface()
+                else
+                  ClipRect(
                   child: FittedBox(
                     fit: videoViewParameters.fit,
                     alignment: videoViewParameters.alignment,
@@ -418,12 +431,20 @@ class VideoState extends State<Video> with WidgetsBindingObserver {
                                           children: [
                                             const SizedBox(),
                                             Positioned.fill(
-                                              child: Texture(
-                                                textureId: id,
-                                                filterQuality:
-                                                    videoViewParameters
-                                                        .filterQuality,
-                                              ),
+                                              // OHOS: in platform view mode the video is rendered
+                                              // into a native XComponent (composed as an independent
+                                              // ArkUI layer under HCPP) instead of a Flutter texture,
+                                              // which is required for 10-bit HDR output.
+                                              child: (notifier is OhosVideoController &&
+                                                      OhosVideoController
+                                                          .usePlatformView)
+                                                  ? buildOhosVideoSurface()
+                                                  : Texture(
+                                                      textureId: id,
+                                                      filterQuality:
+                                                          videoViewParameters
+                                                              .filterQuality,
+                                                    ),
                                             ),
                                             // Keep the |Texture| hidden before the first frame renders. In native implementation, if no default frame size is passed (through VideoController), a starting 1 pixel sized texture/surface is created to initialize the render context & check for H/W support.
                                             // This is then resized based on the video dimensions & accordingly texture ID, texture, EGLDisplay, EGLSurface etc. (depending upon platform) are also changed. Just don't show that 1 pixel texture to the UI.
@@ -447,7 +468,7 @@ class VideoState extends State<Video> with WidgetsBindingObserver {
                             ),
                     ),
                   ),
-                ),
+                  ),
                 if (videoViewParameters.subtitleViewConfiguration.visible &&
                     !(widget.controller.player.platform?.configuration.libass ??
                         false))

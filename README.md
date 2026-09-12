@@ -1,3 +1,27 @@
+本分支在ohos分支下支持通过HCPP的方式在platformView渲染视频，有望（？）实现HDR渲染
+
+需要flutter 3.44以上
+
+为启用HCPP，需要在ohos\entry\src\main\resources\rawfile\buildinfo.json5中开启
+```json
+{
+  "string": [
+    {
+      "name": "enable_ohos_hybrid_composition",
+      "value": "true"
+    }
+  ]
+}
+```
+
+# 已知问题：
+- platformView拦截了点击事件（其它事件如各种手势、长按正常）
+- 视图缩放存在问题
+- 功耗增加
+- 可能的闪退
+- 无法正确渲染HDR
+
+
 # [package:media_kit](https://github.com/media-kit/media-kit)
 
 #### A cross-platform video player & audio player for Flutter & Dart.

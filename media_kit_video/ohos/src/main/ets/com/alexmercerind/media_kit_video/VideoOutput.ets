@@ -28,6 +28,11 @@ export class VideoOutput {
     this.id = this.surfaceProducer.getTextureId();
     this.wid = this.surfaceProducer.getSurfaceId();
     this.textureRegistry.setTextureBackGroundColor(this.id, 0xFF000000);
+
+    // NOTE: the surface buffer format / colorspace / HDR metadata are left to
+    // mpv's OHOS video output (see VideoOutputView.ets). Forcing a 10-bit
+    // format here produced a washed-out ("泛白") image for BOTH HDR and SDR.
+
     this.setSurfaceSize(1, 1, true);
   }
 
