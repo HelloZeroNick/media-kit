@@ -36,6 +36,24 @@ class OhosVideoController extends PlatformVideoController {
   /// required for true 10-bit HDR output.
   static bool usePlatformView = true;
 
+  /// Whether to tag the XComponent surface for HDR from Dart.
+  ///
+  /// DEFAULT: false — deliberately OFF.
+  ///
+  /// libmpv's OHOS video output already configures the NativeWindow itself; its
+  /// own log confirms it:
+  ///
+  ///   mpv/vo/gpu-next/ohos: NativeWindow output switched to BT.2020 PQ
+  ///
+  /// That is also why the reference mpv-arkts player needs no external surface
+  /// setup at all. Tagging the surface again from here conflicts with mpv: we
+  /// used the *_FULL colorspace while mpv's output is `bt.2020/pq/limited`, and
+  /// we applied it at a different point in time. The result is a surface whose
+  /// declared range does not match the pixel data, i.e. a washed-out picture.
+  ///
+  /// Flip to true only to experiment with external tagging.
+  static bool useSurfaceHdrTag = false;
+
   /// Pointer address to the global object reference of `OHNativeWindow`.
   final ValueNotifier<int?> wid = ValueNotifier<int?>(null);
 
@@ -82,36 +100,38 @@ class OhosVideoController extends PlatformVideoController {
         // picture looks washed out ("泛白"). HDR is detected from mpv's
         // video-params: PQ / HLG transfer, or a signal peak above SDR.
         if (usePlatformView) {
-          final bool isHdr = event.gamma == 'pq' ||
-              event.gamma == 'hlg' ||
-              (event.sigPeak != null && event.sigPeak! > 1.0);
-          debugPrint('media_kit: [ohos] video-params gamma=${event.gamma} '
-              'primaries=${event.primaries} sigPeak=${event.sigPeak} '
-              '-> hdr=$isHdr');
-          if (isHdr != _lastHdr) {
-            _lastHdr = isHdr;
+          // Decide HDR from mpv's transfer function ALONE: PQ / HLG are HDR,
+          // any other explicit transfer (bt.1886, srgb, ...) is SDR.
+          //
+          // A null/empty gamma means the parameters are not ready yet and must
+          // NOT be treated as SDR — otherwise transient events flap the surface
+          // between SDR and HDR, which also made the UI stutter.
+          //
+          // NOTE: never restart `vo` from here. Doing so resets mpv's
+          // video-params, produces a null gamma, re-triggers this code and ends
+          // up in an infinite SDR<->HDR loop.
+          final String? gamma = event.gamma;
+          final bool? isHdr = (gamma == 'pq' || gamma == 'hlg')
+              ? true
+              : (gamma != null && gamma.isNotEmpty) ? false : null;
+          debugPrint('media_kit: [ohos] video-params gamma=$gamma '
+              'primaries=${event.primaries} -> hdr=$isHdr');
+          // Content/mastering peak in nits for the HDR static metadata. mpv
+          // reports `sig-peak` relative to the 203-nit SDR reference, so PQ
+          // content lands around 49.26 -> ~10000 nits.
+          final double maxLuminance = (event.sigPeak != null && event.sigPeak! > 1.0)
+              ? (event.sigPeak! * 203.0).clamp(100.0, 10000.0).toDouble()
+              : 1000.0;
+          if (useSurfaceHdrTag && isHdr != null && isHdr != _lastHdr) {
+            final bool value = isHdr;
+            _lastHdr = value;
             try {
               await _channel.invokeMethod(
                 'VideoOutputManager.SetHdr',
-                <String, dynamic>{'hdr': isHdr},
+                <String, dynamic>{'hdr': value, 'maxLuminance': maxLuminance},
               );
             } catch (_) {
               // No platform view / channel not ready: best-effort.
-            }
-            // mpv negotiates its video output (bit depth, transfer, range)
-            // against the surface's colorspace when `vo` starts — which happens
-            // BEFORE this first video-params event, i.e. while the surface is
-            // still tagged SDR. Restarting the video output here makes mpv
-            // re-negotiate against the re-tagged (HDR) surface; otherwise it
-            // keeps the SDR output it already picked and HDR never takes effect.
-            final int? currentWid = wid.value;
-            if (currentWid != null && currentWid != 0) {
-              try {
-                await setProperty('vo', 'null');
-                await setProperty('vo', configuration.vo!);
-              } catch (_) {
-                // Best-effort: a failed restart must not break playback.
-              }
             }
           }
         }

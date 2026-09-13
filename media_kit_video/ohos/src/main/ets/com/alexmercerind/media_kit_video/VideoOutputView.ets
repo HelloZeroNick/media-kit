@@ -226,6 +226,9 @@ export class VideoOutputView extends PlatformView implements MethodCallHandler {
   // HDR metadata tagging. Persisted so it can be re-applied whenever the
   // XComponent recreates its surface (fullscreen switches, rebuilds, ...).
   private hdrEnabled: boolean = false;
+  // Content/mastering peak luminance (nits) reported in the HDR static
+  // metadata. Supplied by Dart from mpv's video-params sig-peak.
+  private hdrMaxLuminance: number = 1000.0;
 
   constructor(context: common.Context, viewId: number, args: ESObject, messenger: BinaryMessenger) {
     super();
@@ -236,10 +239,12 @@ export class VideoOutputView extends PlatformView implements MethodCallHandler {
     this.methodChannel.setMethodCallHandler(this);
     this.surfaceController.setListener((event: string, surfaceId: string | null) => {
       if (event === 'created' && surfaceId != null) {
-        // (Re-)apply the HDR tagging for the (re)created surface BEFORE Dart
-        // (re-)binds --wid, so the window properties are in place by the time
-        // mpv starts rendering into it.
-        this.applyHdrSurface();
+        // NOTE: the surface is intentionally left UNTOUCHED here. libmpv's OHOS
+        // video output configures the NativeWindow itself — its own log says
+        //   mpv/vo/gpu-next/ohos: NativeWindow output switched to BT.2020 PQ
+        // so tagging it again from the outside (with a different range) fights
+        // mpv and washes out the picture. See OhosVideoController.useSurfaceHdrTag.
+        //
         // Push the surface id to Dart so the controller binds / re-binds --wid.
         // The initial push may race with Dart's channel handler installation;
         // Dart also queries GetSurfaceId after attaching, so no push is missed.
@@ -254,9 +259,10 @@ export class VideoOutputView extends PlatformView implements MethodCallHandler {
   // surface as HDR (BT.2020 PQ + HDR10 metadata) or SDR accordingly, so the
   // compositor interprets mpv's output correctly instead of showing washed-out
   // ("泛白") HDR.
-  setHdr(enabled: boolean): void {
-    Log.i(TAG, `setHdr: ${enabled}`);
+  setHdr(enabled: boolean, maxLuminance: number): void {
+    Log.i(TAG, `setHdr: ${enabled}, peak=${maxLuminance}`);
     this.hdrEnabled = enabled;
+    this.hdrMaxLuminance = maxLuminance > 0 ? maxLuminance : 1000.0;
     this.applyHdrSurface();
   }
 
@@ -267,8 +273,9 @@ export class VideoOutputView extends PlatformView implements MethodCallHandler {
       return;
     }
     try {
-      const ok: boolean = mediaKitVideoNative.setSurfaceHdr(surfaceId, this.hdrEnabled);
-      Log.i(TAG, `setSurfaceHdr(${surfaceId}, ${this.hdrEnabled}): ${ok}`);
+      const ok: boolean =
+        mediaKitVideoNative.setSurfaceHdr(surfaceId, this.hdrEnabled, this.hdrMaxLuminance);
+      Log.i(TAG, `setSurfaceHdr(${surfaceId}, ${this.hdrEnabled}, ${this.hdrMaxLuminance}): ${ok}`);
     } catch (e) {
       Log.e(TAG, `setSurfaceHdr failed: ${e}`);
     }

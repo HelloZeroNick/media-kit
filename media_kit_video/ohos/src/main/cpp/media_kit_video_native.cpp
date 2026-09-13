@@ -23,6 +23,7 @@
 #include <hilog/log.h>
 #include <native_window/external_window.h>
 #include <native_buffer/native_buffer.h>
+#include <native_buffer/buffer_common.h>
 
 #undef LOG_DOMAIN
 #undef LOG_TAG
@@ -116,26 +117,59 @@ static napi_value SetSurfaceFormat10Bit(napi_env env, napi_callback_info info) {
 }
 
 // ---------------------------------------------------------------------------
+// HDR10 static metadata (SMPTE ST.2086 + CTA-861.3) for BT.2020 primaries on a
+// nominal 1000-nit mastering display.
+//
+// HarmonyOS needs BOTH the metadata TYPE *and* the STATIC metadata: without the
+// static part the display has no mastering information to tone-map the PQ
+// signal with, which is the documented reason HDR content looks washed out
+// ("泛白").
+// ---------------------------------------------------------------------------
+static int32_t SetHdrStaticMetadata(OHNativeWindow* window, float maxLuminance) {
+  OH_NativeBuffer_StaticMetadata sm = {};
+  // BT.2020 primaries.
+  sm.smpte2086.displayPrimaryRed.x = 0.708f;
+  sm.smpte2086.displayPrimaryRed.y = 0.292f;
+  sm.smpte2086.displayPrimaryGreen.x = 0.170f;
+  sm.smpte2086.displayPrimaryGreen.y = 0.797f;
+  sm.smpte2086.displayPrimaryBlue.x = 0.131f;
+  sm.smpte2086.displayPrimaryBlue.y = 0.046f;
+  // D65 white point.
+  sm.smpte2086.whitePoint.x = 0.3127f;
+  sm.smpte2086.whitePoint.y = 0.3290f;
+  // Light levels in nits. The peak is passed in from Dart, derived from mpv's
+  // video-params sig-peak (e.g. 49.26 * 203 ~= 10000 nits for PQ content).
+  sm.smpte2086.maxLuminance = maxLuminance;
+  sm.smpte2086.minLuminance = 0.001f;
+  // CTA-861.3 light levels.
+  sm.cta861.maxContentLightLevel = maxLuminance;
+  sm.cta861.maxFrameAverageLightLevel = maxLuminance / 5.0f;
+  return OH_NativeWindow_SetMetadataValue(
+      window, OH_HDR_STATIC_METADATA,
+      static_cast<int32_t>(sizeof(OH_NativeBuffer_StaticMetadata)),
+      reinterpret_cast<uint8_t*>(&sm));
+}
+
+// ---------------------------------------------------------------------------
 // setSurfaceHdr(surfaceId: string | number | bigint, hdr: boolean): boolean
 //
 // Tags (or un-tags) the OHNativeWindow backing the XComponent surface as HDR.
 //
 // A 10-bit buffer format alone is NOT enough: unless the surface is *also*
-// given the matching colorspace + HDR metadata, the compositor keeps
-// interpreting the buffer as SDR, so libmpv's PQ / BT.2020 output shows up
-// washed out ("泛白"). These are the "three-piece set" required by the
-// HarmonyOS HDR guidance:
+// given the matching colorspace + metadata TYPE + static metadata, the
+// compositor keeps interpreting the buffer as SDR and libmpv's PQ / BT.2020
+// output shows up washed out ("泛白"). The full set is:
 //
-//   format      -> (negotiated by mpv itself, left untouched here)
+//   format      -> RGBA_1010102 (HDR only; SDR is left to mpv's negotiation)
 //   colorspace  -> OH_COLORSPACE_BT2020_PQ_FULL (HDR) / OH_COLORSPACE_SRGB_FULL (SDR)
-//   metadata    -> OH_VIDEO_HDR_HDR10 (HDR) / OH_VIDEO_NONE (SDR)
+//   metadata    -> OH_HDR_METADATA_TYPE = OH_VIDEO_HDR_HDR10 (HDR) / OH_VIDEO_NONE (SDR)
+//   static meta -> OH_HDR_STATIC_METADATA (HDR only)
 //
-// Both OH_NativeWindow_SetColorSpace and OH_NativeWindow_SetMetadataValue are
-// available since API 12.
+// All of these are available since API 12.
 // ---------------------------------------------------------------------------
 static napi_value SetSurfaceHdr(napi_env env, napi_callback_info info) {
-  size_t argc = 2;
-  napi_value args[2] = {nullptr, nullptr};
+  size_t argc = 3;
+  napi_value args[3] = {nullptr, nullptr, nullptr};
   napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
 
   uint64_t surfaceId = 0;
@@ -146,6 +180,26 @@ static napi_value SetSurfaceHdr(napi_env env, napi_callback_info info) {
   bool hdr = false;
   if (argc >= 2 && args[1] != nullptr) {
     napi_get_value_bool(env, args[1], &hdr);
+  }
+
+  // Optional content/mastering peak luminance in nits (HDR only). Derived on
+  // the Dart side from mpv's video-params sig-peak.
+  double maxLuminance = 1000.0;
+  if (argc >= 3 && args[2] != nullptr) {
+    napi_valuetype type = napi_undefined;
+    napi_typeof(env, args[2], &type);
+    if (type == napi_number) {
+      napi_get_value_double(env, args[2], &maxLuminance);
+    }
+  }
+  if (!(maxLuminance > 0.0)) {
+    maxLuminance = 1000.0;
+  }
+  if (maxLuminance < 100.0) {
+    maxLuminance = 100.0;
+  }
+  if (maxLuminance > 10000.0) {
+    maxLuminance = 10000.0;
   }
 
   napi_value result = nullptr;
@@ -189,13 +243,24 @@ static napi_value SetSurfaceHdr(napi_env env, napi_callback_info info) {
       static_cast<int32_t>(sizeof(OH_NativeBuffer_MetadataType)),
       reinterpret_cast<uint8_t*>(&metadataType));
 
+  // The metadata TYPE alone is not enough: without the matching STATIC metadata
+  // (SMPTE ST.2086 masters + CTA-861.3 light levels) the display has no
+  // mastering information to tone-map with — the documented cause of HDR
+  // looking washed out ("泛白").
+  int32_t staticRet = 0;
+  if (hdr) {
+    staticRet = SetHdrStaticMetadata(window, static_cast<float>(maxLuminance));
+  }
+
   OH_NativeWindow_DestroyNativeWindow(window);
 
   OH_LOG_INFO(LOG_APP,
-              "setSurfaceHdr: id=%{public}lld hdr=%{public}d formatRet=%{public}d colorRet=%{public}d metadataRet=%{public}d",
-              static_cast<long long>(surfaceId), hdr ? 1 : 0, formatRet, colorRet, metadataRet);
+              "setSurfaceHdr: id=%{public}lld hdr=%{public}d peak=%{public}d formatRet=%{public}d colorRet=%{public}d metadataRet=%{public}d staticRet=%{public}d",
+              static_cast<long long>(surfaceId), hdr ? 1 : 0,
+              static_cast<int32_t>(maxLuminance), formatRet, colorRet, metadataRet, staticRet);
 
-  napi_get_boolean(env, formatRet == 0 && colorRet == 0 && metadataRet == 0, &result);
+  napi_get_boolean(
+      env, formatRet == 0 && colorRet == 0 && metadataRet == 0 && staticRet == 0, &result);
   return result;
 }
 

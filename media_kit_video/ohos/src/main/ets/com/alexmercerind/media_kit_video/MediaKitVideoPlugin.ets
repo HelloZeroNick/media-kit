@@ -117,7 +117,9 @@ export default class MediaKitVideoPlugin implements FlutterPlugin, MethodCallHan
         // interprets mpv's PQ / BT.2020 output as HDR instead of SDR.
         const hdrArg: ESObject = call.argument("hdr");
         const hdr: boolean = hdrArg != null && hdrArg.toString() === "true";
-        MediaKitVideoPlugin.videoOutputViewFactory?.setHdr(hdr);
+        const peakArg: ESObject = call.argument("maxLuminance");
+        const maxLuminance: number = peakArg == null ? 1000.0 : parseFloat(peakArg.toString());
+        MediaKitVideoPlugin.videoOutputViewFactory?.setHdr(hdr, maxLuminance);
         result.success(null);
         break;
       }

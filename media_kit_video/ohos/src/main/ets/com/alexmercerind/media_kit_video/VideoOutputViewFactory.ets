@@ -63,9 +63,10 @@ export class VideoOutputViewFactory extends PlatformViewFactory implements Video
   }
 
   // Called by VideoOutputManager.SetHdr: forwards the current content's dynamic
-  // range to the (single) hosted view so it can tag the surface as HDR / SDR.
-  public setHdr(enabled: boolean): void {
-    this.currentView?.setHdr(enabled);
+  // range (and content peak in nits) to the (single) hosted view so it can tag
+  // the surface as HDR / SDR.
+  public setHdr(enabled: boolean, maxLuminance: number): void {
+    this.currentView?.setHdr(enabled, maxLuminance);
   }
 
   // Called by the view itself when disposed, so a disposed view is never
