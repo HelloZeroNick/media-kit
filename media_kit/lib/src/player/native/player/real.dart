@@ -1153,6 +1153,130 @@ class NativePlayer extends PlatformPlayer {
     }
   }
 
+  /// Sets the current secondary [SubtitleTrack] for subtitle output.
+  ///
+  /// * Currently selected secondary [SubtitleTrack] can be accessed using [state.track.secondarySubtitle] or [stream.track.secondarySubtitle].
+  /// * The list of currently available [SubtitleTrack]s can be obtained accessed using [state.tracks.subtitle] or [stream.tracks.subtitle].
+  /// * External subtitle track can be loaded using [SubtitleTrack.uri] or [SubtitleTrack.data] constructor.
+  ///
+  /// **NOTE:** A track cannot be selected as both primary & secondary subtitle
+  /// at the same time (mpv restriction).
+  ///
+  /// ```dart
+  /// player.setSecondarySubtitleTrack(
+  ///   SubtitleTrack.uri(
+  ///     'https://www.iandevlin.com/html5test/webvtt/upc-video-subtitles-en.vtt',
+  ///     title: 'English',
+  ///     language: 'en',
+  ///   ),
+  /// );
+  /// ```
+  ///
+  @override
+  Future<void> setSecondarySubtitleTrack(SubtitleTrack track,
+      {bool synchronized = true}) {
+    Future<void> function() async {
+      if (disposed) {
+        throw AssertionError('[Player] has been disposed');
+      }
+      await waitForPlayerInitialization;
+      await waitForVideoControllerInitializationIfAttached;
+
+      // Reset existing secondary subtitle text in Player.state.subtitle &
+      // Player.stream.subtitle. The primary subtitle text is preserved.
+      state = state.copyWith(
+        subtitle: [
+          state.subtitle.isNotEmpty ? state.subtitle[0] : '',
+          '',
+        ],
+      );
+      if (!subtitleController.isClosed) {
+        subtitleController.add(state.subtitle);
+      }
+
+      if (track.uri || track.data) {
+        final String uri;
+        if (track.uri) {
+          uri = track.id;
+        } else if (track.data) {
+          // Save the subtitle data to a temporary [File].
+          final temp = await TempFile.create();
+          await temp.write_(track.id);
+          // Delete the temporary [File] upon [dispose].
+          release.add(temp.delete_);
+          uri = temp.uri.toString();
+        } else {
+          return;
+        }
+
+        // NOTE: `auto` flag must be used instead of `select` so that the
+        // primary subtitle selection remains untouched. The newly added track
+        // is explicitly selected as the secondary subtitle afterwards.
+        final existing = state.tracks.subtitle.map((e) => e.id).toSet();
+        await _command(
+          [
+            'sub-add',
+            uri,
+            'auto',
+            track.title ?? 'external',
+            track.language ?? 'auto',
+          ],
+        );
+
+        // Wait for the newly added track to appear in the track-list & select
+        // it as the secondary subtitle.
+        SubtitleTrack? added;
+        try {
+          final tracks = await tracksController.stream
+              .firstWhere((e) => e.subtitle.any((s) => !existing.contains(s.id)))
+              .timeout(const Duration(seconds: 5));
+          added = tracks.subtitle.firstWhere((e) => !existing.contains(e.id));
+        } on TimeoutException {
+          // Fallback: scan the latest state in case the stream event was
+          // missed (e.g. raced with another track-list update).
+          for (final e in state.tracks.subtitle) {
+            if (!existing.contains(e.id)) {
+              added = e;
+              break;
+            }
+          }
+        }
+        if (added != null) {
+          await _setPropertyString('secondary-sid', added.id);
+          state = state.copyWith(
+            track: state.track.copyWith(
+              secondarySubtitle: added,
+            ),
+          );
+          if (!trackController.isClosed) {
+            trackController.add(state.track);
+          }
+        }
+      } else {
+        // mpv does not allow the same track to be selected as both primary &
+        // secondary subtitle.
+        if (track.id != 'no' && track.id == state.track.subtitle.id) {
+          return;
+        }
+        await _setPropertyString('secondary-sid', track.id);
+        state = state.copyWith(
+          track: state.track.copyWith(
+            secondarySubtitle: track,
+          ),
+        );
+        if (!trackController.isClosed) {
+          trackController.add(state.track);
+        }
+      }
+    }
+
+    if (synchronized) {
+      return lock.synchronized(function);
+    } else {
+      return function();
+    }
+  }
+
   /// Takes the snapshot of the current video frame & returns encoded image bytes as [Uint8List].
   ///
   /// The [format] parameter specifies the format of the image to be returned. Supported values are:
@@ -1713,6 +1837,11 @@ class NativePlayer extends PlatformPlayer {
           final audio = [AudioTrack.auto(), AudioTrack.no()];
           final subtitle = [SubtitleTrack.auto(), SubtitleTrack.no()];
 
+          VideoTrack vt = VideoTrack.no();
+          AudioTrack at = AudioTrack.no();
+          SubtitleTrack st = SubtitleTrack.no();
+          SubtitleTrack sst = SubtitleTrack.no();
+
           final tracks = value.ref.u.list.ref;
 
           for (int i = 0; i < tracks.num; i++) {
@@ -1738,6 +1867,9 @@ class NativePlayer extends PlatformPlayer {
               int? rotate;
               double? par;
               int? audiochannels;
+              bool selected = false;
+              // 0 = primary (sid), 1 = secondary (secondary-sid).
+              int? mainSelection;
               for (int j = 0; j < map.num; j++) {
                 final property = map.keys[j].cast<Utf8>().toDartString();
                 if (map.values[j].format ==
@@ -1745,6 +1877,9 @@ class NativePlayer extends PlatformPlayer {
                   switch (property) {
                     case 'id':
                       id = map.values[j].u.int64.toString();
+                      break;
+                    case 'main-selection':
+                      mainSelection = map.values[j].u.int64;
                       break;
                     case 'demux-w':
                       w = map.values[j].u.int64;
@@ -1780,6 +1915,9 @@ class NativePlayer extends PlatformPlayer {
                       break;
                     case 'default':
                       isDefault = map.values[j].u.flag > 0;
+                      break;
+                    case 'selected':
+                      selected = map.values[j].u.flag > 0;
                       break;
                   }
                 }
@@ -1822,79 +1960,100 @@ class NativePlayer extends PlatformPlayer {
               }
               switch (type) {
                 case 'video':
-                  video.add(
-                    VideoTrack(
-                      id,
-                      title,
-                      language,
-                      image: image,
-                      albumart: albumart,
-                      isDefault: isDefault,
-                      codec: codec,
-                      decoder: decoder,
-                      w: w,
-                      h: h,
-                      channelscount: channelscount,
-                      channels: channels,
-                      samplerate: samplerate,
-                      fps: fps,
-                      bitrate: bitrate,
-                      rotate: rotate,
-                      par: par,
-                      audiochannels: audiochannels,
-                    ),
+                  final videoTrack = VideoTrack(
+                    id,
+                    title,
+                    language,
+                    image: image,
+                    albumart: albumart,
+                    isDefault: isDefault,
+                    codec: codec,
+                    decoder: decoder,
+                    w: w,
+                    h: h,
+                    channelscount: channelscount,
+                    channels: channels,
+                    samplerate: samplerate,
+                    fps: fps,
+                    bitrate: bitrate,
+                    rotate: rotate,
+                    par: par,
+                    audiochannels: audiochannels,
                   );
+                  video.add(videoTrack);
+                  if (selected) vt = videoTrack;
                   break;
                 case 'audio':
-                  audio.add(
-                    AudioTrack(
-                      id,
-                      title,
-                      language,
-                      image: image,
-                      albumart: albumart,
-                      isDefault: isDefault,
-                      codec: codec,
-                      decoder: decoder,
-                      w: w,
-                      h: h,
-                      channelscount: channelscount,
-                      channels: channels,
-                      samplerate: samplerate,
-                      fps: fps,
-                      bitrate: bitrate,
-                      rotate: rotate,
-                      par: par,
-                      audiochannels: audiochannels,
-                    ),
+                  final audioTrack = AudioTrack(
+                    id,
+                    title,
+                    language,
+                    image: image,
+                    albumart: albumart,
+                    isDefault: isDefault,
+                    codec: codec,
+                    decoder: decoder,
+                    w: w,
+                    h: h,
+                    channelscount: channelscount,
+                    channels: channels,
+                    samplerate: samplerate,
+                    fps: fps,
+                    bitrate: bitrate,
+                    rotate: rotate,
+                    par: par,
+                    audiochannels: audiochannels,
                   );
+                  audio.add(audioTrack);
+                  if (selected) at = audioTrack;
                   break;
                 case 'sub':
-                  subtitle.add(
-                    SubtitleTrack(
-                      id,
-                      title,
-                      language,
-                      image: image,
-                      albumart: albumart,
-                      isDefault: isDefault,
-                      codec: codec,
-                      decoder: decoder,
-                      w: w,
-                      h: h,
-                      channelscount: channelscount,
-                      channels: channels,
-                      samplerate: samplerate,
-                      fps: fps,
-                      bitrate: bitrate,
-                      rotate: rotate,
-                      par: par,
-                      audiochannels: audiochannels,
-                    ),
+                  final subTrack = SubtitleTrack(
+                    id,
+                    title,
+                    language,
+                    image: image,
+                    albumart: albumart,
+                    isDefault: isDefault,
+                    codec: codec,
+                    decoder: decoder,
+                    w: w,
+                    h: h,
+                    channelscount: channelscount,
+                    channels: channels,
+                    samplerate: samplerate,
+                    fps: fps,
+                    bitrate: bitrate,
+                    rotate: rotate,
+                    par: par,
+                    audiochannels: audiochannels,
                   );
+                  subtitle.add(subTrack);
+                  if (selected) {
+                    // Both the primary & the secondary subtitle tracks have
+                    // selected == true; main-selection tells them apart
+                    // (0 = sid, 1 = secondary-sid).
+                    if (mainSelection == 1) {
+                      sst = subTrack;
+                    } else {
+                      st = subTrack;
+                    }
+                  }
                   break;
               }
             }
+          }
+
+          state = state.copyWith(
+            track: Track(
+              video: vt,
+              audio: at,
+              subtitle: st,
+              secondarySubtitle: sst,
+            ),
+          );
+          if (!trackController.isClosed) {
+            trackController.add(state.track);
           }
 
           state = state.copyWith(

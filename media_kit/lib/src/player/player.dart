@@ -310,6 +310,29 @@ class Player {
     return platform?.setSubtitleTrack(track);
   }
 
+  /// Sets the current secondary [SubtitleTrack] for subtitle output.
+  ///
+  /// * Currently selected secondary [SubtitleTrack] can be accessed using [state.track.secondarySubtitle] or [stream.track.secondarySubtitle].
+  /// * The list of currently available [SubtitleTrack]s can be obtained accessed using [state.tracks.subtitle] or [stream.tracks.subtitle].
+  /// * External subtitle track can be loaded using [SubtitleTrack.uri] or [SubtitleTrack.data] constructor.
+  ///
+  /// **NOTE:** A track cannot be selected as both primary & secondary subtitle
+  /// at the same time (mpv restriction).
+  ///
+  /// ```dart
+  /// player.setSecondarySubtitleTrack(
+  ///   SubtitleTrack.uri(
+  ///     'https://www.iandevlin.com/html5test/webvtt/upc-video-subtitles-en.vtt',
+  ///     title: 'English',
+  ///     language: 'en',
+  ///   ),
+  /// );
+  /// ```
+  ///
+  Future<void> setSecondarySubtitleTrack(SubtitleTrack track) async {
+    return platform?.setSecondarySubtitleTrack(track);
+  }
+
   /// Takes the snapshot of the current video frame & returns encoded image bytes as [Uint8List].
   ///
   /// The [format] parameter specifies the format of the image to be returned. Supported values are:

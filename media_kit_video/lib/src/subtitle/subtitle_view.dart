@@ -64,6 +64,12 @@ class SubtitleViewState extends State<SubtitleView> {
     super.dispose();
   }
 
+  @override
+  void didUpdateWidget(SubtitleView oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    padding = widget.configuration.padding;
+  }
+
   /// Sets the padding to be used for the subtitles.
   ///
   /// The [duration] argument may be specified to set the duration of the animation.
@@ -95,21 +101,65 @@ class SubtitleViewState extends State<SubtitleView> {
 
         final textScaler = widget.configuration.textScaler ??
             TextScaler.linear(textScaleFactor);
+
+        Widget text(String data, TextStyle style) => Text(
+              data,
+              style: style,
+              textAlign: widget.configuration.textAlign,
+              textScaler: textScaler,
+            );
+
+        Widget line(String data, TextStyle style, TextStyle? strokeStyle) {
+          if (strokeStyle != null) {
+            return Stack(
+              clipBehavior: Clip.none,
+              children: [
+                text(data, strokeStyle),
+                text(data, style),
+              ],
+            );
+          }
+          return text(data, style);
+        }
+
+        Widget subtitleView() {
+          final configuration = widget.configuration;
+          final first = subtitle.isNotEmpty ? subtitle[0] : '';
+          final second = subtitle.length > 1 ? subtitle[1] : '';
+          if (second.isEmpty) {
+            return line(first, configuration.style, configuration.strokeStyle);
+          }
+          final secondaryStyle =
+              configuration.secondaryStyle ?? configuration.style;
+          // Fall back to the primary stroke style only when no secondary style
+          // is configured at all; an explicitly configured secondary style with
+          // a null stroke means "no stroke".
+          final secondaryStrokeStyle = configuration.secondaryStyle == null
+              ? (configuration.secondaryStrokeStyle ??
+                  configuration.strokeStyle)
+              : configuration.secondaryStrokeStyle;
+          if (first.isEmpty) {
+            return line(second, secondaryStyle, secondaryStrokeStyle);
+          }
+          // The primary & the secondary subtitles are rendered as two separate
+          // [Text]s, so that each can have its own style & background.
+          return Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              line(first, configuration.style, configuration.strokeStyle),
+              SizedBox(height: configuration.spacing),
+              line(second, secondaryStyle, secondaryStrokeStyle),
+            ],
+          );
+        }
+
         return Material(
           color: Colors.transparent,
           child: AnimatedContainer(
             padding: padding,
             duration: duration,
             alignment: Alignment.bottomCenter,
-            child: Text(
-              [
-                for (final line in subtitle)
-                  if (line.trim().isNotEmpty) line.trim(),
-              ].join('\n'),
-              style: widget.configuration.style,
-              textAlign: widget.configuration.textAlign,
-              textScaler: textScaler,
-            ),
+            child: subtitleView(),
           ),
         );
       },
@@ -129,6 +179,29 @@ class SubtitleViewConfiguration {
 
   /// The text style to be used for the subtitles.
   final TextStyle style;
+
+  /// The stroke style to be used for the subtitles.
+  ///
+  /// When non-null, each subtitle line is rendered as a [Stack] with this
+  /// style painted underneath [style] to create an outline effect. This is
+  /// commonly used for adding a stroke when no background color is used.
+  final TextStyle? strokeStyle;
+
+  /// The text style to be used for the secondary subtitles.
+  ///
+  /// Defaults to [style] when null.
+  final TextStyle? secondaryStyle;
+
+  /// The stroke style to be used for the secondary subtitles.
+  ///
+  /// Defaults to [strokeStyle] when [secondaryStyle] is null. When
+  /// [secondaryStyle] is non-null, a null value here means "no stroke".
+  final TextStyle? secondaryStrokeStyle;
+
+  /// The spacing between the primary and secondary subtitles.
+  ///
+  /// Only used when both primary & secondary subtitles are visible.
+  final double spacing;
 
   /// The text alignment to be used for the subtitles.
   final TextAlign textAlign;
@@ -151,6 +224,10 @@ class SubtitleViewConfiguration {
       fontWeight: FontWeight.normal,
       backgroundColor: Color(0xaa000000),
     ),
+    this.strokeStyle,
+    this.secondaryStyle,
+    this.secondaryStrokeStyle,
+    this.spacing = 4.0,
     this.textAlign = TextAlign.center,
     this.textScaler,
     this.padding = const EdgeInsets.fromLTRB(
@@ -160,4 +237,63 @@ class SubtitleViewConfiguration {
       24.0,
     ),
   });
+
+  SubtitleViewConfiguration copyWith({
+    bool? visible,
+    TextStyle? style,
+    TextStyle? strokeStyle,
+    TextStyle? secondaryStyle,
+    TextStyle? secondaryStrokeStyle,
+    double? spacing,
+    TextAlign? textAlign,
+    TextScaler? textScaler,
+    EdgeInsets? padding,
+  }) {
+    return SubtitleViewConfiguration(
+      visible: visible ?? this.visible,
+      style: style ?? this.style,
+      strokeStyle: strokeStyle ?? this.strokeStyle,
+      secondaryStyle: secondaryStyle ?? this.secondaryStyle,
+      secondaryStrokeStyle: secondaryStrokeStyle ?? this.secondaryStrokeStyle,
+      spacing: spacing ?? this.spacing,
+      textAlign: textAlign ?? this.textAlign,
+      textScaler: textScaler ?? this.textScaler,
+      padding: padding ?? this.padding,
+    );
+  }
+
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    if (other is SubtitleViewConfiguration) {
+      return visible == other.visible &&
+          style == other.style &&
+          strokeStyle == other.strokeStyle &&
+          secondaryStyle == other.secondaryStyle &&
+          secondaryStrokeStyle == other.secondaryStrokeStyle &&
+          spacing == other.spacing &&
+          textAlign == other.textAlign &&
+          textScaler == other.textScaler &&
+          padding == other.padding;
+    }
+    return false;
+  }
+
+  @override
+  int get hashCode => Object.hash(
+        visible,
+        style,
+        strokeStyle,
+        secondaryStyle,
+        secondaryStrokeStyle,
+        spacing,
+        textAlign,
+        textScaler,
+        padding,
+      );
+
+  @override
+  String toString() {
+    return 'SubtitleViewConfiguration(visible: $visible, style: $style, strokeStyle: $strokeStyle, secondaryStyle: $secondaryStyle, secondaryStrokeStyle: $secondaryStrokeStyle, spacing: $spacing, textAlign: $textAlign, textScaler: $textScaler, padding: $padding)';
+  }
 }

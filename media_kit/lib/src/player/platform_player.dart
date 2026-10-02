@@ -287,6 +287,12 @@ abstract class PlatformPlayer {
     );
   }
 
+  Future<void> setSecondarySubtitleTrack(SubtitleTrack track) {
+    throw UnimplementedError(
+      '[PlatformPlayer.setSecondarySubtitleTrack] is not implemented',
+    );
+  }
+
   Future<Uint8List?> screenshot(
       {String? format = 'image/jpeg',
       bool includeLibassSubtitles = false}) async {
