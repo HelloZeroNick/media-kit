@@ -47,6 +47,36 @@ class OhosVideoController extends PlatformVideoController {
   /// [StreamSubscription] for listening to video [Rect].
   StreamSubscription<VideoParams>? videoParamsSubscription;
 
+  /// Whether the video is rendered into a native XComponent instead of a
+  /// Flutter texture. Required for HDR output, see
+  /// [VideoControllerConfiguration.usePlatformView].
+  bool get usePlatformView => configuration.usePlatformView;
+
+  /// Identifier of the platform view currently backing this controller.
+  int? _platformViewId;
+
+  /// Largest surface this platform will actually hand back, per axis.
+  ///
+  /// Measured, not guessed: asking for a 7680x4320 texture buffer on HarmonyOS
+  /// yields a **4096x4096** one. The platform clamps each axis independently,
+  /// so an over-limit request comes back square. mpv then letterboxes the 16:9
+  /// video inside that square (confirmed by `osd-dimensions`: 4096x4096 with
+  /// t=896 b=896, leaving 4096x2304 = 16:9), and because [rect] was built from
+  /// the *requested* size, the compositor stretches a square buffer into a 16:9
+  /// box — 1.875 horizontally against 1.055 vertically, i.e. the picture is
+  /// squashed vertically by 1.78x with mpv's black bars dragged along.
+  ///
+  /// Nothing downstream can detect this: `VideoOutput.setSurfaceSize` swallows
+  /// the failure and reports the request back, so the clamp is silent.
+  /// Scaling the request down uniformly keeps it inside what will be granted,
+  /// which makes the buffer and [rect] agree by construction and preserves the
+  /// aspect ratio exactly (7680x4320 -> 4096x2304 is 0.53333 on both axes).
+  ///
+  /// This caps the render surface only. Decoding still runs at full source
+  /// resolution and libplacebo scales into this surface, so 8K playback is not
+  /// downgraded — and no panel this ships to resolves past the cap anyway.
+  static const int _maxSurfaceDimension = 4096;
+
   /// {@macro ohos_video_controller}
   OhosVideoController._(
     super.player,
@@ -54,15 +84,29 @@ class OhosVideoController extends PlatformVideoController {
   ) {
     videoParamsSubscription = player.stream.videoParams.listen(
       (event) => lock.synchronized(() async {
-        final int width;
-        final int height;
-        if (event.rotate == 0 || event.rotate == 180) {
+        int width;
+        int height;
+        // `rotate` is nullable and NativePlayer's own video-params handler
+        // reads it as `rotate ?? 0`. Without the same default a null lands in
+        // the 90/270 branch below and transposes every frame.
+        final rotate = event.rotate ?? 0;
+        if (rotate == 0 || rotate == 180) {
           width = event.dw ?? 0;
           height = event.dh ?? 0;
         } else {
           // width & height are swapped for 90 or 270 degrees rotation.
           width = event.dh ?? 0;
           height = event.dw ?? 0;
+        }
+
+        // Keep the request inside what the platform will grant. See
+        // [_maxSurfaceDimension]: an over-limit request is clamped per axis and
+        // comes back square, which the pipeline then stretches into shape.
+        final longest = width > height ? width : height;
+        if (longest > _maxSurfaceDimension) {
+          final scale = _maxSurfaceDimension / longest;
+          width = (width * scale).round().clamp(1, _maxSurfaceDimension);
+          height = (height * scale).round().clamp(1, _maxSurfaceDimension);
         }
 
         final isZero = width == 0 || height == 0;
@@ -72,16 +116,27 @@ class OhosVideoController extends PlatformVideoController {
           return;
         }
 
-        final handle = await player.handle;
+        // A platform view has no Flutter texture to resize: the XComponent
+        // owns the surface. Its render size still has to be pinned, though.
+        // Under Flutter 3.44's hybrid composition the XComponent is laid out
+        // at the video's unscaled size times the device pixel ratio (e.g.
+        // 13440x7560 for a 4K stream) and scaled down by the compositor, so
+        // the window geometry mpv would otherwise read back is far past the
+        // per-axis surface limit and comes back clamped out of shape — a
+        // vertically squashed picture. Pinned, mpv sets the buffer geometry to
+        // this size itself and the compositor scales it into the view.
+        if (!usePlatformView) {
+          final handle = await player.handle;
 
-        await _channel.invokeMethod(
-          'VideoOutputManager.SetSurfaceSize',
-          {
-            'handle': handle.toString(),
-            'width': width.toString(),
-            'height': height.toString(),
-          },
-        );
+          await _channel.invokeMethod(
+            'VideoOutputManager.SetSurfaceSize',
+            {
+              'handle': handle.toString(),
+              'width': width.toString(),
+              'height': height.toString(),
+            },
+          );
+        }
         await setProperties({
           'ohos-surface-size': [width, height].join('x'),
         });
@@ -144,6 +199,47 @@ class OhosVideoController extends PlatformVideoController {
     // Store the [VideoController] in the [_controllers].
     _controllers[handle] = controller;
 
+    // HDR can only reach the panel through the platform view. A texture is
+    // sampled by Flutter as sRGB, so everything else is tone-mapped to SDR
+    // here instead of being sent as BT.2020 PQ and washing out.
+    final hdrOutput =
+        configuration.usePlatformView && configuration.ohosHdrMode != 'no';
+
+    // Properties that do not depend on how the surface is obtained.
+    final common = <String, String>{
+      'hwdec': configuration.hwdec!,
+      'vid': 'auto',
+      'force-window': 'yes',
+      'sub-use-margins': 'no',
+      'sub-scale-with-window': 'no',
+      'osd-font': 'HarmonyOS Sans SC',
+      'vd-lavc-ohos-smart-fluency': 'yes',
+      if (configuration.ohosHdrMode != null)
+        'ohos-hdr-mode': configuration.ohosHdrMode!,
+      if (hdrOutput) ...{
+        if (configuration.ohosHdrTargetPeak != null)
+          'target-peak': configuration.ohosHdrTargetPeak!.toStringAsFixed(0),
+      } else ...{
+        'hdr-compute-peak': 'no',
+        'target-prim': 'bt.709',
+        'target-trc': 'bt.1886',
+        'target-peak': 'auto',
+        'tone-mapping': 'spline',
+      },
+    };
+
+    if (configuration.usePlatformView) {
+      // The surface belongs to an XComponent that Flutter has not built yet.
+      // Everything except the output is configured now; `wid` and `vo` are
+      // set once the widget reports the platform view through
+      // [attachPlatformView].
+      await controller.lock.synchronized(() async {
+        await controller.setProperty('vo', 'null');
+        await controller.setProperties(common);
+      });
+      return controller;
+    }
+
     final Map<dynamic, dynamic>? data = await _channel.invokeMethod(
       'VideoOutputManager.Create',
       {
@@ -176,18 +272,7 @@ class OhosVideoController extends PlatformVideoController {
         {
           'ohos-surface-size': '${rect.width.toInt()}x${rect.height.toInt()}',
           'wid': wid.toString(),
-          'hwdec': configuration.hwdec!,
-          'vid': 'auto',
-          'force-window': 'yes',
-          'sub-use-margins': 'no',
-          'sub-scale-with-window': 'no',
-          'osd-font': 'HarmonyOS Sans SC',
-          'vd-lavc-ohos-smart-fluency': 'yes',
-          'hdr-compute-peak': 'no',
-          'target-prim': 'bt.709',
-          'target-trc': 'bt.1886',
-          'target-peak': 'auto',
-          'tone-mapping': 'spline',
+          ...common,
         },
       );
       await controller.setProperty('vo', configuration.vo!);
@@ -195,6 +280,61 @@ class OhosVideoController extends PlatformVideoController {
 
     // Return the [PlatformVideoController].
     return controller;
+  }
+
+  /// Points the video output at the XComponent backing the platform view with
+  /// the given [viewId].
+  ///
+  /// ArkUI creates the surface asynchronously, so the native side only replies
+  /// once the XComponent actually has one. Called by the [Video] widget after
+  /// it has created the platform view.
+  Future<void> attachPlatformView(int viewId) async {
+    if (!usePlatformView || _platformViewId == viewId) {
+      return;
+    }
+
+    final surfaceId = await _channel.invokeMethod(
+      'PlatformView.GetSurfaceId',
+      {
+        'viewId': viewId.toString(),
+      },
+    );
+    if (surfaceId == null) {
+      return;
+    }
+
+    _platformViewId = viewId;
+    final surface = int.parse(surfaceId.toString());
+
+    await lock.synchronized(() async {
+      // As with the texture path, the surface has to be known before the GPU
+      // video output is brought up.
+      await setProperty('vo', 'null');
+      await setProperty('wid', surface.toString());
+      await setProperty('vo', configuration.vo!);
+    });
+
+    wid.value = surface;
+  }
+
+  /// Detaches and releases the platform view backing this controller.
+  Future<void> detachPlatformView() async {
+    final viewId = _platformViewId;
+    if (viewId == null) {
+      return;
+    }
+    _platformViewId = null;
+    wid.value = null;
+
+    await lock.synchronized(() async {
+      await setProperty('vo', 'null');
+    });
+    await _channel.invokeMethod(
+      'PlatformView.Dispose',
+      {
+        'viewId': viewId.toString(),
+      },
+    );
   }
 
   /// Sets the required size of the video output.
@@ -216,6 +356,7 @@ class OhosVideoController extends PlatformVideoController {
   /// Disposes the instance. Releases allocated resources back to the system.
   Future<void> _dispose() async {
     await videoParamsSubscription?.cancel();
+    await detachPlatformView();
     final handle = await player.handle;
     _controllers.remove(handle);
     await _channel.invokeMethod(
