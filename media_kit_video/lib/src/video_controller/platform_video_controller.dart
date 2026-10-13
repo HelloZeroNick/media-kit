@@ -150,10 +150,12 @@ class VideoControllerConfiguration {
 
   /// Sets `--target-peak` (display peak brightness, in nits).
   ///
-  /// With it, libplacebo tone-maps the video to this peak and the metadata
-  /// handed to HarmonyOS describes the tone-mapped picture. Leave null to keep
-  /// the source's own peak: the video passes through untouched and the system
-  /// adapts it to the panel from its metadata.
+  /// With it, libplacebo compresses a video brighter than this peak into it,
+  /// and the metadata handed to HarmonyOS describes the tone-mapped picture.
+  /// A video no brighter passes through untouched, with its own metadata: it
+  /// is never stretched to the peak. Leave null to keep the source's own peak
+  /// whatever its brightness: the video passes through untouched and the
+  /// system adapts it to the panel from its metadata.
   ///
   /// Only applied when HDR is output, i.e. with [usePlatformView] and an
   /// [ohosHdrMode] other than `no`. Any other output is tone-mapped to SDR
