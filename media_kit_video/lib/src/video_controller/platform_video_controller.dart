@@ -135,26 +135,25 @@ class VideoControllerConfiguration {
   /// Default: `false`
   final bool usePlatformView;
 
-  /// Sets the `--ohos-hdr-mode` property on the native backend, which decides
-  /// which HDR type is advertised to HarmonyOS.
+  /// Sets the `--ohos-hdr-mode` property on the native backend.
   ///
-  /// One of `auto`, `no`, `hdr10`, `hlg` or `vivid`. `vivid` is how Dolby
-  /// Vision gets mapped onto HDR Vivid: libplacebo applies the Dolby Vision
-  /// RPU either way, so only the signalling differs.
+  /// - `auto`: HDR output, signalled from the bitstream. HDR10 carries its
+  ///   static metadata, HDR Vivid its own dynamic metadata; Dolby Vision and
+  ///   HDR10+, which HarmonyOS cannot signal, travel as HDR Vivid with their
+  ///   dynamic metadata converted.
+  /// - `hdr10`: HDR output with static metadata only, for panels without
+  ///   HDR Vivid.
+  /// - `no`: SDR output, HDR streams are tone-mapped down.
   ///
   /// Default: `null` (leaves the backend at `auto`)
   final String? ohosHdrMode;
 
   /// Sets `--target-peak` (display peak brightness, in nits).
   ///
-  /// Without it libplacebo infers the target peak from the output colorspace,
-  /// which for PQ means 10000 nits — so it assumes a display far brighter than
-  /// any real panel and skips tone mapping that the display then has to do
-  /// blind. Passing the panel's real peak lets the mapping be computed against
-  /// the actual device.
-  ///
-  /// Leave null when the system compositor should own the mapping (e.g. when
-  /// forwarding dynamic metadata), so mpv passes the signal through untouched.
+  /// With it, libplacebo tone-maps the video to this peak and the metadata
+  /// handed to HarmonyOS describes the tone-mapped picture. Leave null to keep
+  /// the source's own peak: the video passes through untouched and the system
+  /// adapts it to the panel from its metadata.
   ///
   /// Only applied when HDR is output, i.e. with [usePlatformView] and an
   /// [ohosHdrMode] other than `no`. Any other output is tone-mapped to SDR
