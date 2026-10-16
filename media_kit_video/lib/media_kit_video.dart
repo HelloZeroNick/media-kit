@@ -11,10 +11,4 @@ export 'package:media_kit_video/src/video/video.dart';
 
 export 'package:media_kit_video/src/subtitle/subtitle_view.dart';
 
-// OHOS: XComponent platform-view rendering (needed for HDR output). Exported
-// so consumers that render video themselves (instead of using the [Video]
-// widget) can mount the platform view without importing lib/src directly.
-export 'package:media_kit_video/src/video_controller/ohos_video_controller/ohos_video_controller.dart';
-export 'package:media_kit_video/src/video/ohos_platform_video.dart';
-
 export 'package:media_kit_video/media_kit_video_controls/media_kit_video_controls.dart';
