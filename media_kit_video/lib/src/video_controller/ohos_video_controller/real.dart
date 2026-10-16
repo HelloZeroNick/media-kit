@@ -354,9 +354,22 @@ class OhosVideoController extends PlatformVideoController {
   }
 
   /// Detaches and releases the platform view backing this controller.
-  Future<void> detachPlatformView() async {
-    final viewId = _platformViewId;
-    if (viewId == null) {
+  ///
+  /// [viewId] scopes the detach to the view that is going away. Two widgets may
+  /// own the same controller at once — the page player and, on HarmonyOS, the
+  /// in-app picture-in-picture overlay both render a [Video] against it — and
+  /// the outgoing one disposes *after* the incoming one has already attached.
+  /// Without the scope the outgoing view would unbind the surface the incoming
+  /// view just bound: mpv's `vo` and the `wid` property get cleared, and the
+  /// video goes black until something rebinds it.
+  Future<void> detachPlatformView({int? viewId}) async {
+    final attached = _platformViewId;
+    if (attached == null) {
+      return;
+    }
+    // A different view has taken over since this one was mounted: leave it
+    // bound, and do not dispose the view that is still in the layer tree.
+    if (viewId != null && attached != viewId) {
       return;
     }
     _platformViewId = null;
@@ -368,7 +381,7 @@ class OhosVideoController extends PlatformVideoController {
     await _channel.invokeMethod(
       'PlatformView.Dispose',
       {
-        'viewId': viewId.toString(),
+        'viewId': attached.toString(),
       },
     );
   }

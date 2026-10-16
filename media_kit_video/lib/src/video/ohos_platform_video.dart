@@ -88,12 +88,18 @@ class _OhosPlatformVideoState extends State<OhosPlatformVideo> {
   /// Detaching is asynchronous (the `vo` is nulled under the player's lock),
   /// and a view disposed before that finishes leaves mpv writing frames into a
   /// released NativeWindow.
+  ///
+  /// The detach is scoped to [view] because another widget may have taken the
+  /// controller over in the meantime — the in-app picture-in-picture overlay
+  /// mounts its own [OhosPlatformVideo] against the same controller while this
+  /// one is being torn down. An unscoped detach would unbind the surface the
+  /// incoming view just bound and leave the video black.
   static Future<void> _release(
     OhosVideoController player,
     ExpensiveOhosViewController view,
   ) async {
     try {
-      await player.detachPlatformView();
+      await player.detachPlatformView(viewId: view.viewId);
     } catch (exception, stacktrace) {
       _report(exception, stacktrace);
     } finally {
@@ -138,10 +144,12 @@ class _OhosPlatformVideoState extends State<OhosPlatformVideo> {
 
     // Leaving fullscreen before the surface came up disposes this state while
     // the attach is still pending. dispose()'s detach was a no-op then, so
-    // undo the attach here or mpv keeps a window whose view is gone.
+    // undo the attach here or mpv keeps a window whose view is gone. Scoped to
+    // this view for the same reason as [_release]: another widget may already
+    // have taken the controller over.
     if (!mounted) {
       try {
-        await player.detachPlatformView();
+        await player.detachPlatformView(viewId: controller.viewId);
       } catch (exception, stacktrace) {
         _report(exception, stacktrace);
       }
