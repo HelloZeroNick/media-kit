@@ -5,3 +5,5 @@
 /// Use of this source code is governed by MIT license that can be found in the LICENSE file.
 
 export 'video_texture.dart' if (dart.library.js_interop) 'video_web.dart';
+export 'simple_video_texture.dart'
+    if (dart.library.js_interop) 'simple_video_web.dart';
