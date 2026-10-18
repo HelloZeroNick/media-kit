@@ -46,11 +46,14 @@ class Initializer {
   }
 
   /// Disposes [Pointer<mpv_handle>].
-  void dispose(Pointer<generated.mpv_handle> ctx) {
+  ///
+  /// Awaits the wakeup/event machinery being fully torn down, so the caller can
+  /// destroy [ctx] afterwards without racing a still-running `mpv_wait_event`.
+  Future<void> dispose(Pointer<generated.mpv_handle> ctx) async {
     if (!isExecmemRestricted) {
       InitializerNativeCallable(mpv).dispose(ctx);
     } else {
-      InitializerIsolate().dispose(mpv, ctx);
+      await InitializerIsolate().dispose(mpv, ctx);
     }
   }
 }
