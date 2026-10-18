@@ -98,8 +98,19 @@ class SimpleVideoState extends State<SimpleVideo> {
     final visible = (_width ?? 0) > 0 && (_height ?? 0) > 0;
     if (_visible != visible) {
       _visible = visible;
+      // [VideoController.rect] is written by the platform render loop, which
+      // may not have ticked yet when width & height first become known (a Live
+      // Photo is only a couple of seconds long). Nudging it rebuilds anything
+      // listening to [rect] -- an enclosing danmaku mask, for instance -- and
+      // the [ListenableBuilder] below, so this widget re-evaluates [_visible]
+      // and swaps its empty branch for the [Texture] one.
+      //
+      // setState is required on top of it: [VideoController.rect] is only
+      // reported for controls-less surfaces here, and the live photo viewer
+      // never touches it otherwise.
       // ignore: invalid_use_of_visible_for_testing_member, invalid_use_of_protected_member
       widget.controller.rect.notifyListeners();
+      if (mounted) setState(() {});
     }
   }
 
