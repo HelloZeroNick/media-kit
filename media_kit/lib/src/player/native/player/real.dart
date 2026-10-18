@@ -102,11 +102,14 @@ class NativePlayer extends PlatformPlayer {
 
       await super.dispose();
 
-      Initializer(mpv).dispose(ctx);
+      // Wait for the event loop (worker isolate on ohos / Android with execmem
+      // restrictions) to stop touching the handle before destroying it.
+      // Destroying while `mpv_wait_event` is still running makes libmpv access
+      // freed memory and abort through its Talloc canary check:
+      // `Assertion failed: h->canary == CANARY (../ta/ta.c: ...)`.
+      await Initializer(mpv).dispose(ctx);
 
-      Future.delayed(const Duration(seconds: 5), () {
-        mpv.mpv_terminate_destroy(ctx);
-      });
+      mpv.mpv_terminate_destroy(ctx);
     }
 
     if (synchronized) {
