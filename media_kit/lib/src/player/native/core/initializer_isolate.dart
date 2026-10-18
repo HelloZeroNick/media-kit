@@ -49,6 +49,10 @@ class InitializerIsolate {
       _mainloop,
       receiver.sendPort,
     );
+    // Completes once the worker isolate has left its `mpv_wait_event` loop and
+    // is no longer touching the `mpv_handle`. [dispose] awaits it so the caller
+    // can safely destroy the handle afterwards.
+    final exited = Completer<void>();
     receiver.listen(
       (message) async {
         if (!completer.isCompleted && message is SendPort) {
@@ -71,6 +75,10 @@ class InitializerIsolate {
           }
           port.send(true);
         } else {
+          // Worker has exited its event loop.
+          if (!exited.isCompleted) {
+            exited.complete();
+          }
           receiver.close();
         }
       },
@@ -81,25 +89,53 @@ class InitializerIsolate {
     // Save the references.
     _ports[handle.address] = port;
     _isolates[handle.address] = isolate;
+    _exited[handle.address] = exited;
 
     return handle;
   }
 
   /// Disposes [Pointer<mpv_handle>].
-  void dispose(generated.MPV mpv, Pointer<generated.mpv_handle> handle) {
-    final port = _ports[handle.address];
-    final isolate = _isolates[handle.address];
-    if (port != null && isolate != null) {
-      port.send(null);
+  ///
+  /// Completes only after the worker isolate has left its `mpv_wait_event`
+  /// loop, so callers may destroy the handle afterwards without racing a
+  /// still-running `mpv_wait_event`.
+  ///
+  /// Without this handshake the worker may still be blocked inside
+  /// `mpv_wait_event` (infinite timeout in release mode) when the handle is
+  /// destroyed; its next call then touches freed memory and libmpv's Talloc
+  /// canary check aborts the process:
+  /// `Assertion failed: h->canary == CANARY (../ta/ta.c: ta_dbg_check_header)`.
+  Future<void> dispose(
+    generated.MPV mpv,
+    Pointer<generated.mpv_handle> handle,
+  ) async {
+    final port = _ports.remove(handle.address);
+    final isolate = _isolates.remove(handle.address);
+    final exited = _exited.remove(handle.address);
+    if (port == null || isolate == null) {
+      return;
+    }
 
-      _ports.remove(handle.address);
-      _isolates.remove(handle.address);
+    // Ask the worker to stop; it sets `disposed` and reports `null` once the
+    // loop has actually been left.
+    port.send(null);
+    // Wake the (possibly infinite) `mpv_wait_event` so the loop can observe
+    // `disposed` instead of waiting for the next real event.
+    mpv.mpv_wakeup(handle);
 
-      mpv.mpv_wakeup(handle);
+    var exitedInTime = false;
+    if (exited != null) {
+      // Never let a wedged isolate block teardown forever.
+      await exited.future.timeout(
+        const Duration(seconds: 2),
+        onTimeout: () {},
+      );
+      exitedInTime = exited.isCompleted;
+    }
 
-      Future.delayed(const Duration(seconds: 2), () {
-        isolate.kill(priority: Isolate.immediate);
-      });
+    // Only force-kill if the isolate did not confirm exit in time.
+    if (!exitedInTime) {
+      isolate.kill(priority: Isolate.immediate);
     }
   }
 
@@ -169,4 +205,6 @@ class InitializerIsolate {
 
   final _ports = HashMap<int, SendPort>();
   final _isolates = HashMap<int, Isolate>();
+  /// Completes when the worker isolate has left its `mpv_wait_event` loop.
+  final _exited = HashMap<int, Completer<void>>();
 }
