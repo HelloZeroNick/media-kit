@@ -52,25 +52,53 @@ class InitializerNativeCallable {
     _locks[ctx.address] = Lock();
     _eventCallbacks[ctx.address] = callback;
     _wakeUpNativeCallables[ctx.address] = nativeCallable;
+    // Ignored once the handle is disposed: `_callback` checks it before
+    // touching the handle again, so a drain loop which resumes after
+    // `dispose` cannot call `mpv_wait_event` on freed memory.
+    _disposed[ctx.address] = false;
     mpv.mpv_set_wakeup_callback(ctx, nativeFunction.cast(), ctx.cast());
     return ctx;
   }
 
   /// Disposes [Pointer<mpv_handle>].
-  void dispose(Pointer<generated.mpv_handle> ctx) {
-    _locks.remove(ctx.address);
-    _eventCallbacks.remove(ctx.address);
+  ///
+  /// Resolves only after an in-flight drain loop has observed [_disposed] and
+  /// stopped touching the handle, so the caller may destroy it right away.
+  ///
+  /// Without this handshake the loop in [_callback] may still be suspended in
+  /// `await _eventCallbacks[...](event)` when the handle is destroyed; its next
+  /// `mpv_wait_event` then reads freed memory and libmpv aborts through its
+  /// Talloc canary check:
+  /// `Assertion failed: h->canary == CANARY (../ta/ta.c: ta_dbg_check_header)`.
+  Future<void> dispose(Pointer<generated.mpv_handle> ctx) async {
+    final address = ctx.address;
+    _disposed[address] = true;
 
-    // Clear the wakeup callback in libmpv before closing NativeCallable
-    // to prevent libmpv from invoking a deleted callback
+    // Stop libmpv from queueing new wakeups on the closing callback.
     mpv.mpv_set_wakeup_callback(ctx, nullptr, nullptr);
-    
-    _wakeUpNativeCallables.remove(ctx.address)?.close();
+
+    final lock = _locks[address];
+    _locks.remove(address);
+
+    // Wait for the drain loop (running inside `lock.synchronized`) to finish.
+    // `_callback` re-checks [_disposed] every iteration and bails out.
+    if (lock != null) {
+      await lock.synchronized(() async {}).timeout(
+        const Duration(seconds: 2),
+        onTimeout: () {},
+      );
+    }
+
+    _eventCallbacks.remove(address);
+    _disposed.remove(address);
+    _wakeUpNativeCallables.remove(address)?.close();
   }
 
   void _callback(Pointer<generated.mpv_handle> ctx) {
-    _locks[ctx.address]?.synchronized(() async {
-      while (true) {
+    final lock = _locks[ctx.address];
+    if (lock == null) return;
+    lock.synchronized(() async {
+      while (!(_disposed[ctx.address] ?? true)) {
         final event = mpv.mpv_wait_event(ctx, 0);
         if (event == nullptr) return;
         if (event.ref.event_id == generated.mpv_event_id.MPV_EVENT_NONE) return;
@@ -82,6 +110,8 @@ class InitializerNativeCallable {
   final _locks = HashMap<int, Lock>();
   final _eventCallbacks = EventCallbackMap();
   final _wakeUpNativeCallables = WakeUpNativeCallableMap();
+  /// Set once [dispose] starts, so an in-flight drain loop stops early.
+  final _disposed = HashMap<int, bool>();
 }
 
 typedef WakeUpCallback = Void Function(Pointer<generated.mpv_handle>);
