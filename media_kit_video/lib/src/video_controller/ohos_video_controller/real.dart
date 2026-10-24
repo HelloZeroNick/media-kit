@@ -116,6 +116,11 @@ class OhosVideoController extends PlatformVideoController {
           return;
         }
 
+        debugPrint(
+          '[PN][vc] surface size -> ${width}x$height rotate=$rotate',
+        );
+        final pnT0 = DateTime.now();
+
         // A platform view has no Flutter texture to resize: the XComponent
         // owns the surface. Its render size still has to be pinned, though.
         // Under Flutter 3.44's hybrid composition the XComponent is laid out
@@ -128,6 +133,7 @@ class OhosVideoController extends PlatformVideoController {
         if (!usePlatformView) {
           final handle = await player.handle;
 
+          final pnCallT0 = DateTime.now();
           await _channel.invokeMethod(
             'VideoOutputManager.SetSurfaceSize',
             {
@@ -136,10 +142,20 @@ class OhosVideoController extends PlatformVideoController {
               'height': height.toString(),
             },
           );
+          final pnCallDt = DateTime.now().difference(pnCallT0).inMilliseconds;
+          if (pnCallDt >= 8) {
+            debugPrint(
+              '[PN][vc] SetSurfaceSize returned ${width}x$height dt=$pnCallDt' 'ms',
+            );
+          }
         }
         await setProperties({
           'ohos-surface-size': [width, height].join('x'),
         });
+        debugPrint(
+          '[PN][vc] setProperties done ${width}x$height '
+          'dt=${DateTime.now().difference(pnT0).inMilliseconds}ms',
+        );
 
         rect.value = Rect.fromLTWH(
           0.0,
@@ -150,6 +166,7 @@ class OhosVideoController extends PlatformVideoController {
 
         if (!waitUntilFirstFrameRenderedCompleter.isCompleted) {
           waitUntilFirstFrameRenderedCompleter.complete();
+          debugPrint('[PN][vc] first frame ${width}x$height');
         }
       }),
     );
@@ -160,6 +177,12 @@ class OhosVideoController extends PlatformVideoController {
     Player player,
     VideoControllerConfiguration configuration,
   ) async {
+    // 诊断埋点（临时）：上屏时序，前缀 [PN] 便于 hilog 过滤。
+    final pnSw = Stopwatch()..start();
+    debugPrint(
+      '[PN][vc] create begin usePlatformView=${configuration.usePlatformView} '
+      'hwdec=${configuration.hwdec} vo=${configuration.vo}',
+    );
     final bool isEmulator = await _channel.invokeMethod('Utils.IsEmulator');
     if (isEmulator) {
       throw UnsupportedError(
@@ -264,6 +287,12 @@ class OhosVideoController extends PlatformVideoController {
     controller.rect.value = rect;
     controller.wid.value = wid;
 
+    debugPrint(
+      '[PN][vc] output id=$id wid=$wid '
+      'size=${rect.width.toInt()}x${rect.height.toInt()} '
+      'dt=${pnSw.elapsedMilliseconds}ms',
+    );
+
     await controller.lock.synchronized(() async {
       // MPV's HarmonyOS video output requires a valid surface ID before the
       // GPU video output is initialized.
@@ -277,6 +306,8 @@ class OhosVideoController extends PlatformVideoController {
       );
       await controller.setProperty('vo', configuration.vo!);
     });
+
+    debugPrint('[PN][vc] create done dt=${pnSw.elapsedMilliseconds}ms');
 
     // Return the [PlatformVideoController].
     return controller;
@@ -391,6 +422,8 @@ class OhosVideoController extends PlatformVideoController {
 
   /// Disposes the instance. Releases allocated resources back to the system.
   Future<void> _dispose() async {
+    final pnSw = Stopwatch()..start();
+    debugPrint('[PN][vc] dispose begin');
     await videoParamsSubscription?.cancel();
     await detachPlatformView();
     final handle = await player.handle;
@@ -401,6 +434,7 @@ class OhosVideoController extends PlatformVideoController {
         'handle': handle.toString(),
       },
     );
+    debugPrint('[PN][vc] dispose done dt=${pnSw.elapsedMilliseconds}ms');
     wid.dispose();
     super.dispose();
   }
