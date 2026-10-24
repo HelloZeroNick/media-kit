@@ -1362,6 +1362,18 @@ class NativePlayer extends PlatformPlayer {
       await waitForVideoControllerInitializationIfAttached;
     }
 
+    // [PN] `mpv_set_property_string` is synchronous: it blocks until libmpv's
+    // core lock is available. While a freshly opened file is being
+    // initialized, mpv may hold that lock for seconds. On OHOS the Dart UI
+    // isolate is driven by the platform main thread, so a synchronous write
+    // freezes the entire application (measured 3.0-3.3s stalls right after
+    // the video surface is created). The async API only queues the request on
+    // mpv's playback thread and returns immediately.
+    if (configuration.async) {
+      await _setPropertyString(property, value);
+      return;
+    }
+
     final name = property.toNativeUtf8();
     final data = value.toNativeUtf8();
     mpv.mpv_set_property_string(

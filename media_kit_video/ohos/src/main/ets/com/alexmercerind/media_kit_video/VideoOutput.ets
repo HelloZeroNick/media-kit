@@ -28,6 +28,7 @@ export class VideoOutput {
     this.id = this.surfaceProducer.getTextureId();
     this.wid = this.surfaceProducer.getSurfaceId();
     this.textureRegistry.setTextureBackGroundColor(this.id, 0xFF000000);
+    Log.w(TAG, `[PN][ark] create id=${this.id} wid=${this.wid} ts=${Date.now()}`);
     this.setSurfaceSize(1, 1, true);
   }
 
@@ -37,7 +38,12 @@ export class VideoOutput {
     }
 
     try {
-      this.textureRegistry.unregisterTexture(this.id);
+      const id = this.id;
+      Log.w(TAG, `[PN][ark] dispose id=${id} ts=${Date.now()}`);
+      const t0 = Date.now();
+      this.textureRegistry.unregisterTexture(id);
+      const dt = Date.now() - t0;
+      Log.w(TAG, `[PN][ark] dispose done id=${id} dt=${dt}ms`);
       this.disposed = true;
       this.id = 0;
       this.wid = 0;
@@ -54,9 +60,13 @@ export class VideoOutput {
         return;
       }
 
+      Log.w(TAG, `[PN][ark] setSurfaceSize id=${this.id} ${width}x${height} force=${force} ts=${Date.now()}`);
       this.w = width;
       this.h = height;
+      const t0 = Date.now();
       this.textureRegistry.setTextureBufferSize(this.id, width, height);
+      const dt = Date.now() - t0;
+      Log.w(TAG, `[PN][ark] setSurfaceSize done id=${this.id} ${width}x${height} dt=${dt}ms`);
     } catch (e) {
       Log.e(TAG, `setSurfaceSize error: ${e}`);
     }
