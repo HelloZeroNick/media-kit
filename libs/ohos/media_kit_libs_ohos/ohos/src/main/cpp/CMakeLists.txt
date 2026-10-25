@@ -52,8 +52,8 @@ endfunction()
 set(LIBMPV "libmpv_aarch64.zip")
 
 # Download URL & SHA256 hash of the libmpv archive.
-set(LIBMPV_URL "https://github.com/p1nbored/libmpv-ohos-build/releases/download/20261013-hdr/${LIBMPV}")
-set(LIBMPV_SHA "140e2c5a6d38572a1f8418cc2463c330077837a38609504c4d532825060e8617")
+set(LIBMPV_URL "https://github.com/HelloZeroNick/libmpv-ohos-build/releases/download/20261025/${LIBMPV}")
+set(LIBMPV_SHA "2ebad9d4d190976423772d01393bb927eed3344027cf3430fec0977459a4cf49")
 
 # Download location of the libmpv archive.
 set(LIBMPV_ARCHIVE "${CMAKE_CURRENT_SOURCE_DIR}/${LIBMPV}")
