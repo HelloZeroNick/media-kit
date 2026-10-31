@@ -8,6 +8,7 @@ import 'package:universal_platform/universal_platform.dart';
 
 import 'package:media_kit/src/models/track.dart';
 import 'package:media_kit/src/models/playable.dart';
+import 'package:media_kit/src/player/native/player/player.dart';
 import 'package:media_kit/src/models/playlist.dart';
 import 'package:media_kit/src/models/media/media.dart';
 import 'package:media_kit/src/models/audio_device.dart';
@@ -15,7 +16,6 @@ import 'package:media_kit/src/models/player_state.dart';
 import 'package:media_kit/src/models/playlist_mode.dart';
 import 'package:media_kit/src/models/player_stream.dart';
 
-import 'package:media_kit/src/player/native/player/player.dart';
 import 'package:media_kit/src/player/web/player/player.dart';
 import 'package:media_kit/src/player/platform_player.dart';
 
@@ -252,6 +252,29 @@ class Player {
   /// Default is `false`.
   Future<void> setShuffle(bool shuffle) async {
     return platform?.setShuffle(shuffle);
+  }
+
+  /// Sets an mpv property on the underlying native player.
+  ///
+  /// Available on native platforms only; no-op (completes immediately) when
+  /// there is no platform player.
+  Future<void> setProperty(String property, String value) async {
+    final platform = this.platform;
+    if (platform is NativePlayer) {
+      return platform.setProperty(property, value);
+    }
+  }
+
+  /// Gets an mpv property from the underlying native player.
+  ///
+  /// Available on native platforms only; returns an empty string when there
+  /// is no platform player.
+  Future<String> getProperty(String property) async {
+    final platform = this.platform;
+    if (platform is NativePlayer) {
+      return platform.getProperty(property);
+    }
+    return '';
   }
 
   /// Sets the current [AudioDevice] for audio output.
