@@ -2942,4 +2942,84 @@ _GetPlaylistResult _getPlaylist(_GetPlaylistData data) {
   return _GetPlaylistResult(index, playlist);
 }
 
+/// Adaptation helpers carried over from the PiliNara app
+/// (`lib/media_kit_adapt/media_kit_adapt.dart`), now living with the fork.
+extension PlatformPlayerAdapt on PlatformPlayer {
+  /// Returns this [PlatformPlayer] as a [NativePlayer].
+  ///
+  /// Throws if the platform player is not a [NativePlayer].
+  NativePlayer get maybeAsNativePlayer {
+    if (this is! NativePlayer) {
+      throw Exception('PlatformPlayer is not NativePlayer');
+    }
+    return this as NativePlayer;
+  }
+}
+
+extension MPVExt on generated.MPV {
+  void setProperty(
+    Pointer<generated.mpv_handle> ctx,
+    String property,
+    String value,
+  ) {
+    final name = property.toNativeUtf8();
+    final data = value.toNativeUtf8();
+    mpv_set_property_string(ctx, name.cast<Int8>(), data.cast<Int8>());
+    calloc.free(name);
+    calloc.free(data);
+  }
+
+  /// Sets HTTP headers on a raw mpv handle.
+  ///
+  /// [userAgent] maps to the `user-agent` property, [referer] to `referrer`,
+  /// and any additional [headers] are passed as an `mpv_node` array through
+  /// the `http-header-fields` property.
+  void setHeader(
+    Pointer<generated.mpv_handle> ctx, {
+    String? userAgent,
+    String? referer,
+    Map<String, String>? headers,
+  }) {
+    if (userAgent != null) setProperty(ctx, 'user-agent', userAgent);
+    if (referer != null) setProperty(ctx, 'referrer', referer);
+    if (headers != null) {
+      assert(
+        !(headers.containsKey('user-agent') ||
+            headers.containsKey('User-Agent')),
+      );
+      final property = 'http-header-fields'.toNativeUtf8();
+      // Allocate & fill the [mpv_node] with the headers.
+      final value = calloc<generated.mpv_node>();
+      final valRef = value.ref
+        ..format = generated.mpv_format.MPV_FORMAT_NODE_ARRAY;
+      valRef.u.list = calloc<generated.mpv_node_list>();
+      final valList = valRef.u.list.ref
+        ..num = headers.length
+        ..values = calloc<generated.mpv_node>(headers.length);
+
+      int i = 0;
+      for (var e in headers.entries) {
+        valList.values[i++]
+          ..format = generated.mpv_format.MPV_FORMAT_STRING
+          ..u.string = '${e.key}: ${e.value}'.toNativeUtf8().cast();
+      }
+      mpv_set_property(
+        ctx,
+        property.cast<Int8>(),
+        generated.mpv_format.MPV_FORMAT_NODE,
+        value.cast(),
+      );
+      // Free the allocated memory.
+      calloc.free(property);
+      for (int i = 0; i < valList.num; i++) {
+        calloc.free(valList.values[i].u.string);
+      }
+      calloc
+        ..free(valList.values)
+        ..free(valRef.u.list)
+        ..free(value);
+    }
+  }
+}
+
 // --------------------------------------------------
