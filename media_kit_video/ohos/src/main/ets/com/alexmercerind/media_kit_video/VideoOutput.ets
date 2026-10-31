@@ -37,7 +37,8 @@ export class VideoOutput {
     }
 
     try {
-      this.textureRegistry.unregisterTexture(this.id);
+      const id = this.id;
+      this.textureRegistry.unregisterTexture(id);
       this.disposed = true;
       this.id = 0;
       this.wid = 0;

@@ -23,6 +23,7 @@ import {
   MEDIA_KIT_VIDEO_VIEW_TYPE
 } from './MediaKitVideoPlatformView';
 import { common } from '@kit.AbilityKit';
+import display from '@ohos.display';
 
 export default class MediaKitVideoPlugin implements FlutterPlugin, MethodCallHandler, AbilityAware {
   private channel: MethodChannel | null = null;
@@ -125,6 +126,26 @@ export default class MediaKitVideoPlugin implements FlutterPlugin, MethodCallHan
       }
       case "Utils.IsEmulator": {
         result.success(Utils.isEmulator());
+        break;
+      }
+      case "Utils.GetMaxPhysicalResolution": {
+        // 设备支持的最高物理分辨率（数组按分辨率从低到高排列，末元素即最高；
+        // 折叠屏覆盖展开态内外屏）。视频渲染 surface 以它的长边 × 系数封顶，
+        // 一次性查询、不监听变化。API 12+ 起可用，失败走 error 由 Dart 侧
+        // 回退默认值。
+        display.getAllDisplayPhysicalResolution().then((resolutions) => {
+          if (resolutions.length === 0) {
+            result.error("unavailable", "empty physical resolution list", null);
+            return;
+          }
+          const maxRes = resolutions[resolutions.length - 1];
+          result.success({
+            'width': maxRes.physicalWidth,
+            'height': maxRes.physicalHeight,
+          });
+        }).catch((err: Error) => {
+          result.error("unavailable", `getAllDisplayPhysicalResolution failed: ${err.message}`, null);
+        });
         break;
       }
       case "Utils.EnterNativeFullscreen": {

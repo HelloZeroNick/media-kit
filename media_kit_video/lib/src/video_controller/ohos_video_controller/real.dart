@@ -55,7 +55,16 @@ class OhosVideoController extends PlatformVideoController {
   /// Identifier of the platform view currently backing this controller.
   int? _platformViewId;
 
-  /// Largest surface this platform will actually hand back, per axis.
+  /// Largest render-surface long edge, computed once per process.
+  ///
+  /// Baseline is the display panel's highest supported physical resolution
+  /// (foldables included — the largest entry across all fold modes), queried
+  /// through the plugin's own `Utils.GetMaxPhysicalResolution` channel method;
+  /// no display-change listening. The video is zoomable, so the cap keeps 1.5x
+  /// of the panel's long edge as zoom headroom: a zoomed-in video still
+  /// renders at full sharpness up to 1.5x zoom.
+  ///
+  /// The platform itself also enforces a hard per-axis limit:
   ///
   /// Measured, not guessed: asking for a 7680x4320 texture buffer on HarmonyOS
   /// yields a **4096x4096** one. The platform clamps each axis independently,
@@ -68,14 +77,45 @@ class OhosVideoController extends PlatformVideoController {
   ///
   /// Nothing downstream can detect this: `VideoOutput.setSurfaceSize` swallows
   /// the failure and reports the request back, so the clamp is silent.
-  /// Scaling the request down uniformly keeps it inside what will be granted,
-  /// which makes the buffer and [rect] agree by construction and preserves the
-  /// aspect ratio exactly (7680x4320 -> 4096x2304 is 0.53333 on both axes).
+  ///
+  /// Final cap = min(1.5 x panel long edge, 4096). When 1.5x exceeds the
+  /// platform's 4096 grant, the 4096 limit wins. The comparison uses long
+  /// edges only: requests at or under the cap pass through untouched, and an
+  /// over-cap request is scaled down uniformly so the short edge follows the
+  /// aspect exactly (7680x4320 -> 4096x2304 is 0.53333 on both axes) and the
+  /// buffer and [rect] agree by construction.
   ///
   /// This caps the render surface only. Decoding still runs at full source
   /// resolution and libplacebo scales into this surface, so 8K playback is not
-  /// downgraded — and no panel this ships to resolves past the cap anyway.
-  static const int _maxSurfaceDimension = 4096;
+  /// downgraded.
+  ///
+  /// Query failure (old API level, emulator) keeps the platform's own 4096 as
+  /// the whole cap.
+  static int _maxSurfaceDimension = 4096;
+
+  /// Memoized one-shot loader for [_maxSurfaceDimension]; the panel's maximum
+  /// resolution cannot change within a process, so it is read exactly once.
+  static Future<void>? _maxSurfaceDimensionFuture;
+
+  static Future<void> _loadMaxSurfaceDimension() {
+    return _maxSurfaceDimensionFuture ??= Future(() async {
+      try {
+        final data = await _channel
+            .invokeMethod<Map>('Utils.GetMaxPhysicalResolution');
+        final width = data?['width'] as int? ?? 0;
+        final height = data?['height'] as int? ?? 0;
+        final panelLongEdge = width > height ? width : height;
+        if (panelLongEdge <= 0) {
+          return; // keep 4096
+        }
+        final cap = (panelLongEdge * 1.5).round();
+        _maxSurfaceDimension = cap > 4096 ? 4096 : cap;
+      } catch (e) {
+        // Keep the platform's own 4096 limit when the query is unavailable.
+        debugPrint('[video_controller] surface cap query failed, keep 4096: $e');
+      }
+    });
+  }
 
   /// {@macro ohos_video_controller}
   OhosVideoController._(
@@ -99,14 +139,16 @@ class OhosVideoController extends PlatformVideoController {
           height = event.dw ?? 0;
         }
 
-        // Keep the request inside what the platform will grant. See
-        // [_maxSurfaceDimension]: an over-limit request is clamped per axis and
-        // comes back square, which the pipeline then stretches into shape.
+        // Cap the request's LONG edge at min(1.5x panel long edge, 4096);
+        // see [_maxSurfaceDimension]. At or under the cap the size passes
+        // through untouched. Over the cap, scale down uniformly so the short
+        // edge follows the aspect exactly — a per-axis clamp would distort.
+        final cap = _maxSurfaceDimension;
         final longest = width > height ? width : height;
-        if (longest > _maxSurfaceDimension) {
-          final scale = _maxSurfaceDimension / longest;
-          width = (width * scale).round().clamp(1, _maxSurfaceDimension);
-          height = (height * scale).round().clamp(1, _maxSurfaceDimension);
+        if (longest > cap) {
+          final scale = cap / longest;
+          width = (width * scale).round().clamp(1, cap);
+          height = (height * scale).round().clamp(1, cap);
         }
 
         final isZero = width == 0 || height == 0;
@@ -160,6 +202,9 @@ class OhosVideoController extends PlatformVideoController {
     Player player,
     VideoControllerConfiguration configuration,
   ) async {
+    // Resolve the render-surface cap before the first videoParams event can
+    // arrive: one channel round-trip, memoized for the process lifetime.
+    await _loadMaxSurfaceDimension();
     final bool isEmulator = await _channel.invokeMethod('Utils.IsEmulator');
     if (isEmulator) {
       throw UnsupportedError(
