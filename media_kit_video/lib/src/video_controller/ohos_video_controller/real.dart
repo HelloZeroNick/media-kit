@@ -55,6 +55,12 @@ class OhosVideoController extends PlatformVideoController {
   /// Identifier of the platform view currently backing this controller.
   int? _platformViewId;
 
+  /// Surface size requested for the platform view, in device pixels.
+  ///
+  /// Set when the platform view is laid out at the whole player rect (HDR),
+  /// with mpv letterboxing the video inside it.
+  Size? _platformViewSurfaceSize;
+
   /// Largest surface this platform will actually hand back, per axis.
   ///
   /// Measured, not guessed: asking for a 7680x4320 texture buffer on HarmonyOS
@@ -76,6 +82,32 @@ class OhosVideoController extends PlatformVideoController {
   /// resolution and libplacebo scales into this surface, so 8K playback is not
   /// downgraded — and no panel this ships to resolves past the cap anyway.
   static const int _maxSurfaceDimension = 4096;
+
+  /// Pins the platform-view surface to [physicalSize] (device pixels).
+  ///
+  /// The [Video] widget calls this when the platform view covers the whole
+  /// player rect instead of the fitted video rect.
+  Future<void> setPlatformViewSurfaceSize(Size physicalSize) async {
+    if (!usePlatformView) {
+      return;
+    }
+    final width = physicalSize.width.round().clamp(1, _maxSurfaceDimension);
+    final height = physicalSize.height.round().clamp(1, _maxSurfaceDimension);
+    if (width <= 1 || height <= 1) {
+      return;
+    }
+    final next = Size(width.toDouble(), height.toDouble());
+    if (_platformViewSurfaceSize == next) {
+      return;
+    }
+    _platformViewSurfaceSize = next;
+    await lock.synchronized(() async {
+      await setProperties({
+        'ohos-surface-size': '${width}x$height',
+      });
+    });
+    rect.value = Rect.fromLTWH(0.0, 0.0, next.width, next.height);
+  }
 
   /// {@macro ohos_video_controller}
   OhosVideoController._(
@@ -109,9 +141,22 @@ class OhosVideoController extends PlatformVideoController {
           height = (height * scale).round().clamp(1, _maxSurfaceDimension);
         }
 
-        final isZero = width == 0 || height == 0;
-        final isSame = width == rect.value?.width.toInt() &&
-            height == rect.value?.height.toInt();
+        // The platform view may be laid out at the whole player rect, with mpv
+        // letterboxing the video inside it. Keep the surface size chosen by
+        // [setPlatformViewSurfaceSize] instead of resetting it to the video's
+        // own dimensions.
+        final surfaceWidth =
+            (_platformViewSurfaceSize?.width ?? width.toDouble())
+                .round()
+                .clamp(1, _maxSurfaceDimension);
+        final surfaceHeight =
+            (_platformViewSurfaceSize?.height ?? height.toDouble())
+                .round()
+                .clamp(1, _maxSurfaceDimension);
+
+        final isZero = surfaceWidth == 0 || surfaceHeight == 0;
+        final isSame = surfaceWidth == rect.value?.width.toInt() &&
+            surfaceHeight == rect.value?.height.toInt();
         if (isZero || isSame) {
           return;
         }
@@ -150,7 +195,7 @@ class OhosVideoController extends PlatformVideoController {
           }
         }
         await setProperties({
-          'ohos-surface-size': [width, height].join('x'),
+          'ohos-surface-size': '${surfaceWidth}x$surfaceHeight',
         });
         debugPrint(
           '[PN][vc] setProperties done ${width}x$height '
@@ -160,8 +205,8 @@ class OhosVideoController extends PlatformVideoController {
         rect.value = Rect.fromLTWH(
           0.0,
           0.0,
-          width.toDouble(),
-          height.toDouble(),
+          surfaceWidth.toDouble(),
+          surfaceHeight.toDouble(),
         );
 
         if (!waitUntilFirstFrameRenderedCompleter.isCompleted) {

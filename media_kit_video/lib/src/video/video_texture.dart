@@ -412,18 +412,47 @@ class VideoState extends State<Video> with WidgetsBindingObserver {
                                         notifier is OhosVideoController &&
                                             notifier.usePlatformView;
                                     if ((id != null || usePlatformView) &&
-                                        rect != null &&
+                                        (rect != null || usePlatformView) &&
                                         _visible) {
+                                      final targetWidth =
+                                          videoViewParameters.width ?? 0.0;
+                                      final targetHeight =
+                                          videoViewParameters.height ?? 0.0;
+                                      if (usePlatformView) {
+                                        // Let the platform view cover the whole
+                                        // player rect and mpv letterbox the
+                                        // video inside it. Flutter overlays
+                                        // above the video then stay on a single
+                                        // surface instead of crossing the
+                                        // video/letterbox boundary.
+                                        final dpr =
+                                            MediaQuery.devicePixelRatioOf(
+                                          context,
+                                        );
+                                        final physical = Size(
+                                          targetWidth * dpr,
+                                          targetHeight * dpr,
+                                        );
+                                        WidgetsBinding.instance
+                                            .addPostFrameCallback((_) {
+                                          notifier.setPlatformViewSurfaceSize(
+                                            physical,
+                                          );
+                                        });
+                                      }
                                       return SizedBox(
                                         // Apply aspect ratio if provided.
-                                        width:
-                                            videoViewParameters.aspectRatio ==
+                                        width: usePlatformView
+                                            ? targetWidth
+                                            : videoViewParameters.aspectRatio ==
                                                     null
-                                                ? rect.width
-                                                : rect.height *
+                                                ? rect!.width
+                                                : rect!.height *
                                                     videoViewParameters
                                                         .aspectRatio!,
-                                        height: rect.height,
+                                        height: usePlatformView
+                                            ? targetHeight
+                                            : rect!.height,
                                         child: Stack(
                                           children: [
                                             const SizedBox(),
@@ -442,7 +471,8 @@ class VideoState extends State<Video> with WidgetsBindingObserver {
                                             // Keep the |Texture| hidden before the first frame renders. In native implementation, if no default frame size is passed (through VideoController), a starting 1 pixel sized texture/surface is created to initialize the render context & check for H/W support.
                                             // This is then resized based on the video dimensions & accordingly texture ID, texture, EGLDisplay, EGLSurface etc. (depending upon platform) are also changed. Just don't show that 1 pixel texture to the UI.
                                             // NOTE: Unmounting |Texture| causes the |MarkTextureFrameAvailable| to not do anything on GNU/Linux.
-                                            if (rect.width <= 1.0 &&
+                                            if (rect != null &&
+                                                rect.width <= 1.0 &&
                                                 rect.height <= 1.0)
                                               Positioned.fill(
                                                 child: Container(
