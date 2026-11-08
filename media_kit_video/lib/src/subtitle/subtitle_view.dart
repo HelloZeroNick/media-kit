@@ -112,28 +112,25 @@ class SubtitleViewState extends State<SubtitleView> {
               textScaler: textScaler,
             );
 
-        return Material(
-          color: Colors.transparent,
-          child: AnimatedContainer(
-            padding: padding,
-            duration: duration,
-            alignment: Alignment.bottomCenter,
-            child: widget.enableDragSubtitle
-                ? GestureDetector(
-                    behavior: HitTestBehavior.opaque,
-                    onVerticalDragUpdate: (details) {
-                      double bottom =
-                          clampDouble(padding.bottom - details.delta.dy, 0, 200);
-                      padding = padding.copyWith(bottom: bottom);
-                      setState(() {});
-                    },
-                    onVerticalDragEnd: (details) {
-                      widget.onUpdatePadding?.call(padding);
-                    },
-                    child: subtitleView(),
-                  )
-                : subtitleView(),
-          ),
+        return AnimatedContainer(
+          margin: padding,
+          duration: duration,
+          alignment: Alignment.bottomCenter,
+          child: widget.enableDragSubtitle
+              ? GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onVerticalDragUpdate: (details) {
+                    double bottom =
+                        clampDouble(padding.bottom - details.delta.dy, 0, 200);
+                    padding = padding.copyWith(bottom: bottom);
+                    setState(() {});
+                  },
+                  onVerticalDragEnd: (details) {
+                    widget.onUpdatePadding?.call(padding);
+                  },
+                  child: subtitleView(),
+                )
+              : subtitleView(),
         );
       },
     );
