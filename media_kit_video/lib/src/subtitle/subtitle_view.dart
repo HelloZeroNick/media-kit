@@ -5,6 +5,7 @@
 /// Use of this source code is governed by MIT license that can be found in the LICENSE file.
 import 'dart:async';
 import 'dart:math';
+import 'dart:ui';
 import 'package:flutter/material.dart';
 
 import 'package:media_kit_video/src/video_controller/video_controller.dart';
@@ -24,11 +25,17 @@ class SubtitleView extends StatefulWidget {
   /// The configuration to be used for the subtitles.
   final SubtitleViewConfiguration configuration;
 
+  final bool enableDragSubtitle;
+
+  final ValueChanged<EdgeInsets>? onUpdatePadding;
+
   /// {@macro subtitle_view}
   const SubtitleView({
     super.key,
     required this.controller,
     required this.configuration,
+    this.enableDragSubtitle = false,
+    this.onUpdatePadding,
   });
 
   @override
@@ -153,14 +160,25 @@ class SubtitleViewState extends State<SubtitleView> {
           );
         }
 
-        return Material(
-          color: Colors.transparent,
-          child: AnimatedContainer(
-            padding: padding,
-            duration: duration,
-            alignment: Alignment.bottomCenter,
-            child: subtitleView(),
-          ),
+        return AnimatedContainer(
+          margin: padding,
+          duration: duration,
+          alignment: Alignment.bottomCenter,
+          child: widget.enableDragSubtitle
+              ? GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onVerticalDragUpdate: (details) {
+                    double bottom =
+                        clampDouble(padding.bottom - details.delta.dy, 0, 200);
+                    padding = padding.copyWith(bottom: bottom);
+                    setState(() {});
+                  },
+                  onVerticalDragEnd: (details) {
+                    widget.onUpdatePadding?.call(padding);
+                  },
+                  child: subtitleView(),
+                )
+              : subtitleView(),
         );
       },
     );
