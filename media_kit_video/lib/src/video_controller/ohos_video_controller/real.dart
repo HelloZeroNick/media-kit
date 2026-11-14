@@ -55,6 +55,11 @@ class OhosVideoController extends PlatformVideoController {
   /// Identifier of the platform view currently backing this controller.
   int? _platformViewId;
 
+  /// Cached `player.handle` for [_dispose], which runs after `Player.dispose`;
+  /// the getter would assert on a disposed player. The address is stable for
+  /// the life of the mpv instance.
+  int? _handle;
+
   /// Largest surface this platform will actually hand back, per axis.
   ///
   /// Measured, not guessed: asking for a 7680x4320 texture buffer on HarmonyOS
@@ -215,6 +220,7 @@ class OhosVideoController extends PlatformVideoController {
       player,
       configuration,
     );
+    controller._handle = handle;
 
     // Register [_dispose] for execution upon [Player.dispose].
     player.platform?.release.add(controller._dispose);
@@ -299,7 +305,10 @@ class OhosVideoController extends PlatformVideoController {
       await controller.setProperty('vo', 'null');
       await controller.setProperties(
         {
-          'ohos-surface-size': '${rect.width.toInt()}x${rect.height.toInt()}',
+          // Only when the surface already reports a real size; otherwise let
+          // mpv read the queue geometry and the first videoParams pin it.
+          if (rect.width > 0 && rect.height > 0)
+            'ohos-surface-size': '${rect.width.toInt()}x${rect.height.toInt()}',
           'wid': wid.toString(),
           ...common,
         },
@@ -439,7 +448,23 @@ class OhosVideoController extends PlatformVideoController {
     debugPrint('[PN][vc] dispose begin');
     await videoParamsSubscription?.cancel();
     await detachPlatformView();
-    final handle = await player.handle;
+    // detachPlatformView is a no-op on the texture path (_platformViewId is
+    // null), so mpv is still flushing into the texture when it is unregistered
+    // below. Stop the producer first. Fire-and-forget: mpv's vo=null teardown is
+    // asynchronous and waiting for it would block the platform thread.
+    if (!usePlatformView) {
+      try {
+        await lock.synchronized(() async {
+          await setProperty('vo', 'null');
+        });
+      } catch (e) {
+        debugPrint('[PN][vc] dispose: set vo=null failed: $e');
+      }
+    }
+    final handle = _handle;
+    if (handle == null) {
+      return;
+    }
     _controllers.remove(handle);
     await _channel.invokeMethod(
       'VideoOutputManager.Dispose',
