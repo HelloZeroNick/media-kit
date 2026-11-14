@@ -402,9 +402,11 @@ class OhosVideoController extends PlatformVideoController {
     _platformViewId = null;
     wid.value = null;
 
-    await lock.synchronized(() async {
-      await setProperty('vo', 'null');
-    });
+    // Same disposed-guard problem as in [_dispose]: a detach racing
+    // Player.dispose() must not lose the PlatformView.Dispose call below.
+    if (!platform.setPropertyDuringDispose('vo', 'null')) {
+      debugPrint('[PN][vc] detach: set vo=null failed');
+    }
     await _channel.invokeMethod(
       'PlatformView.Dispose',
       {
@@ -437,28 +439,28 @@ class OhosVideoController extends PlatformVideoController {
     await detachPlatformView();
     // detachPlatformView is a no-op on the texture path (_platformViewId is
     // null), so mpv is still flushing into the texture when it is unregistered
-    // below. Stop the producer first. Fire-and-forget: mpv's vo=null teardown is
-    // asynchronous and waiting for it would block the platform thread.
+    // below. Stop the producer first.
+    //
+    // `Player.dispose()` has already flipped `disposed = true` by the time
+    // release callbacks run, so the regular `setProperty` would throw
+    // "[Player] has been disposed" and the handshake would silently do
+    // nothing. Use the teardown path instead; it queues the write without
+    // waiting for a reply.
     if (!usePlatformView) {
-      try {
-        await lock.synchronized(() async {
-          await setProperty('vo', 'null');
-        });
-      } catch (e) {
-        debugPrint('[PN][vc] dispose: set vo=null failed: $e');
+      if (!platform.setPropertyDuringDispose('vo', 'null')) {
+        debugPrint('[PN][vc] dispose: set vo=null failed');
       }
     }
     final handle = _handle;
-    if (handle == null) {
-      return;
+    if (handle != null) {
+      _controllers.remove(handle);
+      await _channel.invokeMethod(
+        'VideoOutputManager.Dispose',
+        {
+          'handle': handle.toString(),
+        },
+      );
     }
-    _controllers.remove(handle);
-    await _channel.invokeMethod(
-      'VideoOutputManager.Dispose',
-      {
-        'handle': handle.toString(),
-      },
-    );
     debugPrint('[PN][vc] dispose done dt=${pnSw.elapsedMilliseconds}ms');
     wid.dispose();
     super.dispose();
