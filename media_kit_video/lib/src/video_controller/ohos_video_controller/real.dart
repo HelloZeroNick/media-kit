@@ -60,6 +60,11 @@ class OhosVideoController extends PlatformVideoController {
   /// the life of the mpv instance.
   int? _handle;
 
+  /// Video output create() held back because the surface had no buffer
+  /// geometry yet; activated by the first videoParams once `ohos-surface-size`
+  /// has been pinned. Null once activated.
+  String? _pendingVo;
+
   /// Largest surface this platform will actually hand back, per axis.
   ///
   /// Measured, not guessed: asking for a 7680x4320 texture buffer on HarmonyOS
@@ -161,6 +166,15 @@ class OhosVideoController extends PlatformVideoController {
           '[PN][vc] setProperties done ${width}x$height '
           'dt=${DateTime.now().difference(pnT0).inMilliseconds}ms',
         );
+
+        // Geometry is pinned now: activate the video output that create()
+        // held back because the surface had no size yet.
+        final pendingVo = _pendingVo;
+        if (pendingVo != null) {
+          _pendingVo = null;
+          await setProperty('vo', pendingVo);
+          debugPrint('[PN][vc] vo activated after geometry');
+        }
 
         rect.value = Rect.fromLTWH(
           0.0,
@@ -299,21 +313,30 @@ class OhosVideoController extends PlatformVideoController {
       'dt=${pnSw.elapsedMilliseconds}ms',
     );
 
+    final sized = rect.width > 0 && rect.height > 0;
+
     await controller.lock.synchronized(() async {
       // MPV's HarmonyOS video output requires a valid surface ID before the
       // GPU video output is initialized.
       await controller.setProperty('vo', 'null');
       await controller.setProperties(
         {
-          // Only when the surface already reports a real size; otherwise let
-          // mpv read the queue geometry and the first videoParams pin it.
-          if (rect.width > 0 && rect.height > 0)
+          // Only when the surface already reports a real size; when it does
+          // not, activating `vo` waits for the first videoParams below —
+          // ohos_reconfig() fails outright on a window whose buffer geometry
+          // was never set, which would stop the video chain before any
+          // videoParams could ever fire (cold-start black screen).
+          if (sized)
             'ohos-surface-size': '${rect.width.toInt()}x${rect.height.toInt()}',
           'wid': wid.toString(),
           ...common,
         },
       );
-      await controller.setProperty('vo', configuration.vo!);
+      if (sized) {
+        await controller.setProperty('vo', configuration.vo!);
+      } else {
+        controller._pendingVo = configuration.vo;
+      }
     });
 
     debugPrint('[PN][vc] create done dt=${pnSw.elapsedMilliseconds}ms');
@@ -448,6 +471,7 @@ class OhosVideoController extends PlatformVideoController {
   Future<void> _dispose() async {
     final pnSw = Stopwatch()..start();
     debugPrint('[PN][vc] dispose begin');
+    _pendingVo = null;
     await videoParamsSubscription?.cancel();
     await detachPlatformView();
     // detachPlatformView is a no-op on the texture path (_platformViewId is
