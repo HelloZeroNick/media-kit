@@ -71,6 +71,12 @@ class SubtitleViewState extends State<SubtitleView> {
     super.dispose();
   }
 
+  @override
+  void didUpdateWidget(SubtitleView oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    padding = widget.configuration.padding;
+  }
+
   /// Sets the padding to be used for the subtitles.
   ///
   /// The [duration] argument may be specified to set the duration of the animation.
@@ -102,15 +108,31 @@ class SubtitleViewState extends State<SubtitleView> {
 
         final textScaler = widget.configuration.textScaler ??
             TextScaler.linear(textScaleFactor);
-        Widget subtitleView() => Text(
-              [
-                for (final line in subtitle)
-                  if (line.trim().isNotEmpty) line.trim(),
-              ].join('\n'),
-              style: widget.configuration.style,
+        final data = [
+          for (final line in subtitle)
+            if (line.trim().isNotEmpty) line.trim(),
+        ].join('\n');
+
+        Widget line(TextStyle style) => Text(
+              data,
+              style: style,
               textAlign: widget.configuration.textAlign,
               textScaler: textScaler,
             );
+
+        Widget subtitleView() {
+          final strokeStyle = widget.configuration.strokeStyle;
+          if (strokeStyle != null) {
+            return Stack(
+              clipBehavior: Clip.none,
+              children: [
+                line(strokeStyle),
+                line(widget.configuration.style),
+              ],
+            );
+          }
+          return line(widget.configuration.style);
+        }
 
         return AnimatedContainer(
           margin: padding,
@@ -150,6 +172,9 @@ class SubtitleViewConfiguration {
   /// The text style to be used for the subtitles.
   final TextStyle style;
 
+  /// The stroke style to be used for the subtitles.
+  final TextStyle? strokeStyle;
+
   /// The text alignment to be used for the subtitles.
   final TextAlign textAlign;
 
@@ -171,6 +196,7 @@ class SubtitleViewConfiguration {
       fontWeight: FontWeight.normal,
       backgroundColor: Color(0xaa000000),
     ),
+    this.strokeStyle,
     this.textAlign = TextAlign.center,
     this.textScaler,
     this.padding = const EdgeInsets.fromLTRB(
@@ -180,4 +206,43 @@ class SubtitleViewConfiguration {
       24.0,
     ),
   });
+
+  SubtitleViewConfiguration copyWith({
+    bool? visible,
+    TextStyle? style,
+    TextStyle? strokeStyle,
+    TextAlign? textAlign,
+    TextScaler? textScaler,
+    EdgeInsets? padding,
+  }) {
+    return SubtitleViewConfiguration(
+      visible: visible ?? this.visible,
+      style: style ?? this.style,
+      strokeStyle: strokeStyle ?? this.strokeStyle,
+      textAlign: textAlign ?? this.textAlign,
+      textScaler: textScaler ?? this.textScaler,
+      padding: padding ?? this.padding,
+    );
+  }
+
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) {
+      return true;
+    }
+    if (other.runtimeType != runtimeType) {
+      return false;
+    }
+    return other is SubtitleViewConfiguration &&
+        other.visible == visible &&
+        other.style == style &&
+        other.strokeStyle == strokeStyle &&
+        other.textAlign == textAlign &&
+        other.textScaler == textScaler &&
+        other.padding == padding;
+  }
+
+  @override
+  int get hashCode => Object.hash(
+      visible, style, strokeStyle, textAlign, textScaler, padding);
 }
