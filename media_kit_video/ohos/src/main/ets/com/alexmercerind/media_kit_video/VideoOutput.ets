@@ -29,7 +29,9 @@ export class VideoOutput {
     this.wid = this.surfaceProducer.getSurfaceId();
     this.textureRegistry.setTextureBackGroundColor(this.id, 0xFF000000);
     Log.w(TAG, `[PN][ark] create id=${this.id} wid=${this.wid} ts=${Date.now()}`);
-    this.setSurfaceSize(1, 1, true);
+    // No 1x1 setSurfaceSize here: it forces a real producer buffer pool rebuild
+    // (SET_BUFFER_GEOMETRY(1,1)) that the first videoParams repeats at the true
+    // size. w/h stay 0, i.e. getSizeData reports 0x0 = "no real size yet".
   }
 
   dispose(): void {
