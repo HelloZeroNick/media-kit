@@ -26,4 +26,5 @@ export 'package:media_kit/src/player/platform_player.dart';
 export 'package:media_kit/src/player/player.dart';
 
 export 'package:media_kit/src/player/native/player/player.dart';
+export 'package:media_kit/src/player/native/core/mpv_handle_releaser.dart';
 export 'package:media_kit/src/player/web/player/player.dart';
