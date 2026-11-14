@@ -520,6 +520,13 @@ class PlayerConfiguration {
   /// Learn more: https://ffmpeg.org/ffmpeg-protocols.html#Protocol-Options
   final List<String> protocolWhitelist;
 
+  /// Extra mpv properties applied before [mpv_initialize].
+  ///
+  /// Mirrors the `options` field of the upstream `native` branch so call sites
+  /// written against that API (`Player.create`) compile against this fork.
+  /// Entries here override the fork's own pre-init defaults.
+  final Map<String, String>? options;
+
   /// {@macro player_configuration}
   const PlayerConfiguration({
     this.vo = 'null',
@@ -545,6 +552,7 @@ class PlayerConfiguration {
       'https',
       'crypto',
     ],
+    this.options,
   });
 }
 

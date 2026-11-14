@@ -57,6 +57,22 @@ class VideoController {
   /// The [Player] instance associated with this [VideoController].
   final Player player;
 
+  /// Creates a [VideoController] and waits until the platform implementation
+  /// is ready (id & rect populated).
+  ///
+  /// Mirrors the `VideoController.create` API of the upstream `native` branch
+  /// so call sites written against it compile unchanged against this fork.
+  /// The plain [VideoController] constructor keeps its existing behavior.
+  static Future<VideoController> create(
+    Player player, {
+    VideoControllerConfiguration configuration =
+        const VideoControllerConfiguration(),
+  }) async {
+    final controller = VideoController(player, configuration: configuration);
+    await controller.platform.future;
+    return controller;
+  }
+
   /// Platform specific internal implementation initialized depending upon the current platform.
   final platform = Completer<PlatformVideoController>();
 
