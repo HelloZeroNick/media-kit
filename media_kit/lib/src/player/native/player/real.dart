@@ -1385,6 +1385,47 @@ class NativePlayer extends PlatformPlayer {
     calloc.free(data);
   }
 
+  /// Sets a property during teardown, after [disposed] has been set.
+  ///
+  /// [setProperty] refuses to run once [disposed] is `true`, but the `release`
+  /// callbacks that run inside [super.dispose] still need to talk to libmpv —
+  /// `media_kit_video` pushes `vo=null` there so mpv stops writing into a
+  /// surface that is about to be unregistered. `ctx` is alive until
+  /// `mpv_terminate_destroy`, so the write is safe in that window.
+  ///
+  /// Fire-and-forget: the request is queued on mpv's playback thread and the
+  /// reply is never awaited, so teardown cannot stall on a wedged core.
+  /// Returns `false` when the request could not even be submitted.
+  bool setPropertyDuringDispose(String property, String value) {
+    if (!disposed) {
+      // Player still alive: the normal guarded path is available.
+      setProperty(property, value, waitForInitialization: false);
+      return true;
+    }
+    final namePtr = property.toNativeUtf8();
+    final string = value.toNativeUtf8();
+    // API requires char**.
+    final ptr = calloc<Pointer<Void>>(1);
+    ptr.value = Pointer.fromAddress(string.address);
+    final requestNumber = _asyncRequestNumber++;
+    _setPropertyRequests[requestNumber] = Completer<int>();
+    final code = mpv.mpv_set_property_async(
+      ctx,
+      requestNumber,
+      namePtr.cast(),
+      generated.mpv_format.MPV_FORMAT_STRING,
+      ptr.cast(),
+    );
+    if (code < 0) {
+      // Sending failed; drop the completer so the reply handler stays quiet.
+      _setPropertyRequests.remove(requestNumber);
+    }
+    calloc.free(ptr);
+    calloc.free(string);
+    calloc.free(namePtr);
+    return code >= 0;
+  }
+
   /// Retrieves the value of a property from the internal libmpv instance of this [Player].
   /// Please use this method only if you know what you are doing, existing methods in [Player] implementation are suited for the most use cases.
   ///
