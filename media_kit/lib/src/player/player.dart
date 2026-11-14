@@ -126,6 +126,20 @@ class Player {
   /// Platform specific internal implementation initialized depending upon the current platform.
   PlatformPlayer? platform;
 
+  /// Creates a [Player] whose underlying platform implementation has finished
+  /// initializing when this future resolves.
+  ///
+  /// Mirrors the `Player.create` API of the upstream `native` branch so call
+  /// sites written against it compile unchanged against this fork. The plain
+  /// [Player] constructor keeps its existing fire-and-forget behavior.
+  static Future<Player> create({
+    PlayerConfiguration configuration = const PlayerConfiguration(),
+  }) async {
+    final player = Player(configuration: configuration);
+    await player.platform?.waitForPlayerInitialization;
+    return player;
+  }
+
   /// Current state of the [Player].
   PlayerState get state => platform!.state;
 
