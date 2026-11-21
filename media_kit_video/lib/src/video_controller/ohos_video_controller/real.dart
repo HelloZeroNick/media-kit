@@ -87,6 +87,115 @@ class OhosVideoController extends PlatformVideoController {
   /// downgraded — and no panel this ships to resolves past the cap anyway.
   static const int _maxSurfaceDimension = 4096;
 
+  /// Relative size change below which a new `videoParams` is ignored.
+  ///
+  /// Bitstreams routinely report slightly different `dw`/`dh` for what is
+  /// visually the same picture — anamorphic padding, coded-vs-display crops,
+  /// adaptive quality switches landing 1016x1920 next to 1080x1920. Every
+  /// accepted change is expensive in a way that is easy to miss: it writes
+  /// `ohos-surface-size`, which mpv turns into VOCTRL_EXTERNAL_RESIZE and a
+  /// full `ra_gl_ctx_resize()`, and it renegotiates the producer buffer pool.
+  /// A 2% band absorbs the jitter while still passing real mode changes (the
+  /// smallest meaningful step on this platform is 360p -> 480p, far above it).
+  static const double _surfaceSizeJitterTolerance = 0.02;
+
+  /// Minimum interval between two accepted size changes.
+  ///
+  /// Guards against a burst of `videoParams` during a quality switch or a
+  /// seek: the stream restarts and reports several sizes within a few hundred
+  /// milliseconds, and each one otherwise tears down and rebuilds the surface
+  /// chain. Latest-wins is preserved by keeping the event that arrives after
+  /// the window elapses; a pending trailing update is coalesced rather than
+  /// dropped, because dropping it can leave the surface at a stale size.
+  static const Duration _surfaceSizeThrottle = Duration(milliseconds: 250);
+
+  /// When the last size change was applied, for [_surfaceSizeThrottle].
+  DateTime? _lastSurfaceSizeAt;
+
+  /// A `videoParams` arrived inside the throttle window and still has to be
+  /// applied once it elapses.
+  Timer? _surfaceSizePendingTimer;
+
+  /// Size the surface is currently pinned to, or null before the first one.
+  /// Kept separately from [rect] so [ValueNotifier] assignment can be skipped
+  /// when nothing actually changed.
+  int? _appliedWidth;
+  int? _appliedHeight;
+
+  /// Pins the render surface to a size derived from [VideoParams].
+  ///
+  /// Split out of the [videoParams] listener so the throttle in
+  /// [_surfaceSizeThrottle] can replay a coalesced update through the same
+  /// path instead of duplicating the property writes.
+  Future<void> _applyVideoParamsSize(int width, int height, int rotate) async {
+
+    debugPrint(
+      '[PN][vc] surface size -> ${width}x$height rotate=$rotate',
+    );
+    final pnT0 = DateTime.now();
+
+    // A platform view has no Flutter texture to resize: the XComponent
+    // owns the surface. Its render size still has to be pinned, though.
+    // Under Flutter 3.44's hybrid composition the XComponent is laid out
+    // at the video's unscaled size times the device pixel ratio (e.g.
+    // 13440x7560 for a 4K stream) and scaled down by the compositor, so
+    // the window geometry mpv would otherwise read back is far past the
+    // per-axis surface limit and comes back clamped out of shape — a
+    // vertically squashed picture. Pinned, mpv sets the buffer geometry to
+    // this size itself and the compositor scales it into the view.
+    if (!usePlatformView) {
+      final handle = await player.handle;
+
+      final pnCallT0 = DateTime.now();
+      await _channel.invokeMethod(
+        'VideoOutputManager.SetSurfaceSize',
+        {
+          'handle': handle.toString(),
+          'width': width.toString(),
+          'height': height.toString(),
+        },
+      );
+      final pnCallDt = DateTime.now().difference(pnCallT0).inMilliseconds;
+      if (pnCallDt >= 8) {
+        debugPrint(
+          '[PN][vc] SetSurfaceSize returned ${width}x$height dt=$pnCallDt' 'ms',
+        );
+      }
+    }
+    await setProperties({
+      'ohos-surface-size': [width, height].join('x'),
+    });
+    debugPrint(
+      '[PN][vc] setProperties done ${width}x$height '
+      'dt=${DateTime.now().difference(pnT0).inMilliseconds}ms',
+    );
+
+    // Geometry is pinned now: activate the video output that create()
+    // held back because the surface had no size yet.
+    final pendingVo = _pendingVo;
+    if (pendingVo != null) {
+      _pendingVo = null;
+      await setProperty('vo', pendingVo);
+      debugPrint('[PN][vc] vo activated after geometry');
+    }
+
+    rect.value = Rect.fromLTWH(
+      0.0,
+      0.0,
+      width.toDouble(),
+      height.toDouble(),
+    );
+
+    if (!waitUntilFirstFrameRenderedCompleter.isCompleted) {
+      waitUntilFirstFrameRenderedCompleter.complete();
+      debugPrint('[PN][vc] first frame ${width}x$height');
+    }
+
+    _appliedWidth = width;
+    _appliedHeight = height;
+    _lastSurfaceSizeAt = DateTime.now();
+  }
+
   /// {@macro ohos_video_controller}
   OhosVideoController._(
     super.player,
@@ -120,73 +229,44 @@ class OhosVideoController extends PlatformVideoController {
         }
 
         final isZero = width == 0 || height == 0;
-        final isSame = width == rect.value?.width.toInt() &&
-            height == rect.value?.height.toInt();
-        if (isZero || isSame) {
+        if (isZero) {
           return;
         }
 
-        debugPrint(
-          '[PN][vc] surface size -> ${width}x$height rotate=$rotate',
-        );
-        final pnT0 = DateTime.now();
-
-        // A platform view has no Flutter texture to resize: the XComponent
-        // owns the surface. Its render size still has to be pinned, though.
-        // Under Flutter 3.44's hybrid composition the XComponent is laid out
-        // at the video's unscaled size times the device pixel ratio (e.g.
-        // 13440x7560 for a 4K stream) and scaled down by the compositor, so
-        // the window geometry mpv would otherwise read back is far past the
-        // per-axis surface limit and comes back clamped out of shape — a
-        // vertically squashed picture. Pinned, mpv sets the buffer geometry to
-        // this size itself and the compositor scales it into the view.
-        if (!usePlatformView) {
-          final handle = await player.handle;
-
-          final pnCallT0 = DateTime.now();
-          await _channel.invokeMethod(
-            'VideoOutputManager.SetSurfaceSize',
-            {
-              'handle': handle.toString(),
-              'width': width.toString(),
-              'height': height.toString(),
-            },
-          );
-          final pnCallDt = DateTime.now().difference(pnCallT0).inMilliseconds;
-          if (pnCallDt >= 8) {
-            debugPrint(
-              '[PN][vc] SetSurfaceSize returned ${width}x$height dt=$pnCallDt' 'ms',
-            );
+        // Skip sub-jitter differences: see [_surfaceSizeJitterTolerance].
+        // Measured against the size actually pinned, not against [rect], so a
+        // pending or rejected update cannot desynchronise the two.
+        final appliedW = _appliedWidth;
+        final appliedH = _appliedHeight;
+        if (appliedW != null && appliedH != null) {
+          final dw = (width - appliedW).abs() / appliedW;
+          final dh = (height - appliedH).abs() / appliedH;
+          if (dw < _surfaceSizeJitterTolerance &&
+              dh < _surfaceSizeJitterTolerance) {
+            return;
           }
         }
-        await setProperties({
-          'ohos-surface-size': [width, height].join('x'),
-        });
-        debugPrint(
-          '[PN][vc] setProperties done ${width}x$height '
-          'dt=${DateTime.now().difference(pnT0).inMilliseconds}ms',
-        );
 
-        // Geometry is pinned now: activate the video output that create()
-        // held back because the surface had no size yet.
-        final pendingVo = _pendingVo;
-        if (pendingVo != null) {
-          _pendingVo = null;
-          await setProperty('vo', pendingVo);
-          debugPrint('[PN][vc] vo activated after geometry');
+        // Throttle bursts (quality switch, seek): see [_surfaceSizeThrottle].
+        final now = DateTime.now();
+        final last = _lastSurfaceSizeAt;
+        if (last != null && now.difference(last) < _surfaceSizeThrottle) {
+          // Coalesce: keep only the newest request and apply it when the
+          // window closes, so the surface never ends up on a stale size.
+          _surfaceSizePendingTimer?.cancel();
+          final delay = _surfaceSizeThrottle - now.difference(last);
+          _surfaceSizePendingTimer = Timer(delay, () {
+            _surfaceSizePendingTimer = null;
+            // Re-enter lock.synchronized: the timer fires outside the
+            // listener's critical section, and the property writes below
+            // must not interleave with create()/dispose() or another update.
+            lock.synchronized(
+              () => _applyVideoParamsSize(width, height, rotate),
+            );
+          });
+          return;
         }
-
-        rect.value = Rect.fromLTWH(
-          0.0,
-          0.0,
-          width.toDouble(),
-          height.toDouble(),
-        );
-
-        if (!waitUntilFirstFrameRenderedCompleter.isCompleted) {
-          waitUntilFirstFrameRenderedCompleter.complete();
-          debugPrint('[PN][vc] first frame ${width}x$height');
-        }
+        await _applyVideoParamsSize(width, height, rotate);
       }),
     );
   }
@@ -472,6 +552,11 @@ class OhosVideoController extends PlatformVideoController {
     final pnSw = Stopwatch()..start();
     debugPrint('[PN][vc] dispose begin');
     _pendingVo = null;
+    // A coalesced size update must not fire into a controller whose texture
+    // is already gone -- it would write `ohos-surface-size` and `vo` against
+    // a released surface.
+    _surfaceSizePendingTimer?.cancel();
+    _surfaceSizePendingTimer = null;
     await videoParamsSubscription?.cancel();
     await detachPlatformView();
     // detachPlatformView is a no-op on the texture path (_platformViewId is
@@ -497,6 +582,19 @@ class OhosVideoController extends PlatformVideoController {
           'handle': handle.toString(),
         },
       );
+      // VideoOutputManager.Dispose only unregisters the texture; the engine
+      // tears the GPU side down on the raster thread afterwards
+      // (OHOSExternalTexture::OnTextureUnregistered drops the DlImage, clears
+      // the buffer LRU and destroys the Vulkan resources). Returning before
+      // that finishes lets the next controller create a fresh texture while
+      // the previous one still holds Surface-backed memory -- on a repeated
+      // create/dispose cycle that is a real GPU leak, and it also races the
+      // per-frame acquire path. Give the raster thread a chance to run it.
+      //
+      // A fixed frame of grace, not a handshake: the engine exposes no
+      // completion signal for unregistration, and blocking teardown on a
+      // renderer callback risks stalling Player.dispose() outright.
+      await Future<void>.delayed(const Duration(milliseconds: 16));
     }
     debugPrint('[PN][vc] dispose done dt=${pnSw.elapsedMilliseconds}ms');
     wid.dispose();
